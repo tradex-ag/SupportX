@@ -9,6 +9,7 @@ import type {
   ReferenceQuery,
   ShipmentFact,
 } from "../../core/contracts.ts";
+import { trackingHref } from "../../core/tracking.ts";
 import { assertAllowedEndpoint, HttpError, requestBinary, requestJson } from "../http.ts";
 
 /**
@@ -90,7 +91,7 @@ function mapParcels(shipment: Json): ParcelFact[] {
   const parcels: ParcelFact[] = arr(shipment.parcels).map((p) => ({
     id: str(p.id),
     trackingId: str(p.trackingId),
-    trackingUrl: str(p.trackingUrl),
+    trackingUrl: trackingHref(str(p.trackingUrl), str(p.trackingId)),
     carrierId: str(p.shippingCarrierId),
     reference: str(p.reference),
     source: "parcels" as const,
@@ -100,7 +101,7 @@ function mapParcels(shipment: Json): ParcelFact[] {
   if (parcels.length === 0 && (str(shipment.packageTrackingNumber) || str(shipment.packageTrackingUrl))) {
     parcels.push({
       trackingId: str(shipment.packageTrackingNumber),
-      trackingUrl: str(shipment.packageTrackingUrl),
+      trackingUrl: trackingHref(str(shipment.packageTrackingUrl), str(shipment.packageTrackingNumber)),
       carrierId: str(shipment.shippingCarrierId),
       source: "legacy_package_tracking",
     });

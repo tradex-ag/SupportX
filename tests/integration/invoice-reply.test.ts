@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { getCase, updateWorkspaceSettings } from "../../packages/services/cases.ts";
+import { caseCounts, getCase, listCases, setStatus, updateWorkspaceSettings } from "../../packages/services/cases.ts";
 import { setSendEnabled, verifyReplyRoute } from "../../packages/services/connections.ts";
 import type { ServiceError } from "../../packages/services/context.ts";
 import { attachUploadedFile, listDocuments, setDraftDocuments } from "../../packages/services/documents.ts";
-import { autoInvoice, draftInvoiceReply } from "../../packages/services/invoices.ts";
+import { autoInvoice, draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
 import { DEMO } from "../../packages/testing/demo-data.ts";
 import { approveDraft, dispatchOutbox, queueReply } from "../../packages/services/replies.ts";
 import { many, one } from "../../packages/storage/db.ts";
@@ -190,5 +190,36 @@ describe("Rechnungsanfragen automatisch", () => {
     assert.equal(await one(h.ctx.db, "SELECT 1 FROM drafts WHERE conversation_id = $1 AND decision = 'invoice'", [conv.id]), null);
     await updateWorkspaceSettings(h.ctx, s.owner, { autoInvoice: "draft" });
     assert.equal(await autoInvoice(h.ctx, s.workspaceId, conv.id), "skipped");
+  });
+});
+
+describe("Rechnung herunterladen und anhaken", () => {
+  it("keeps the invoice with the case once, and it can be ticked as attachment of the reply", async () => {
+    const { h, s, conv } = await amazonCase();
+    const first = await fetchCaseInvoices(h.ctx, s.agent, conv.id);
+    const again = await fetchCaseInvoices(h.ctx, s.agent, conv.id);
+    assert.equal(first.files.length, 1);
+    assert.equal(again.files[0]!.id, first.files[0]!.id, "the same document is not stored twice");
+    await rejectsWith(fetchCaseInvoices(h.ctx, s.viewer, conv.id), "FORBIDDEN");
+    const draft = (await currentDraft(h, s, conv.id))!;
+    const { version } = await setDraftDocuments(h.ctx, s.agent, draft.id, { documentIds: [first.files[0]!.id], expectedVersion: draft.version });
+    assert.equal(version, draft.version + 1);
+    assert.equal(h.graph.replies.length, 0, "nothing sent");
+  });
+});
+
+describe("Klärung nötig", () => {
+  it("list and counter agree, done cases are not in it", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    loadDemoMails(h.graph);
+    await syncAndDrain(h, s);
+    const list = await listCases(h.ctx, s.agent, "needs_attention");
+    assert.ok(list.length > 0);
+    assert.equal((await caseCounts(h.ctx, s.agent))!.needs_attention, list.length);
+    await setStatus(h.ctx, s.agent, (list[0] as { id: string }).id, "closed");
+    const after = await listCases(h.ctx, s.agent, "needs_attention");
+    assert.equal(after.length, list.length - 1);
+    assert.equal((await caseCounts(h.ctx, s.agent))!.needs_attention, after.length);
   });
 });

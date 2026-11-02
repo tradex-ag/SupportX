@@ -3,6 +3,7 @@ import { orderLinks, type OrderLink } from "./order-links.ts";
 import { api, fmtDate, MATCH_LABEL, OUTBOX_LABEL, PLATFORM_LABEL } from "./api.ts";
 import { INTENT_LABEL } from "./Inbox.tsx";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
+import { trackingHref } from "../../../packages/core/tracking.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -241,7 +242,21 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
         <div className="case-side">
           <section className="card">
             <div className="row wrap"><h3>Bestellung in weclapp</h3><span className={`pill ${match.tone}`}>{match.label}</span></div>
-            <OrderPanel data={data} canEdit={canEdit} onLink={(body) => act(() => api("POST", `${base}/cases/${caseId}/order-link`, body), "Zuordnung aktualisiert.")} />
+            <OrderPanel
+              data={data}
+              canEdit={canEdit}
+              onLink={(body) => act(() => api("POST", `${base}/cases/${caseId}/order-link`, body), "Zuordnung aktualisiert.")}
+              invoiceFiles={(data.caseFiles ?? []).filter((f) => f.source === "erp_invoice")}
+              documentBase={`${base}/documents`}
+              draft={draft}
+              replyFiles={data.replyFiles ?? { supported: false, note: "" }}
+              onFetchInvoices={() => act(async () => {
+                const r = await api<{ files: CaseFile[] }>("POST", `${base}/cases/${caseId}/invoices/fetch`);
+                // Start the download right away; the file also stays in the list.
+                for (const f of r.files) { const a = document.createElement("a"); a.href = `${base}/documents/${f.id}`; a.download = f.name; a.click(); }
+              }, "Rechnung aus weclapp geholt.")}
+              onAttach={(fileId, on) => draft && act(() => api("PUT", `${base}/drafts/${draft.id}/documents`, { documentIds: on ? [...(draft.document_ids ?? []), fileId] : (draft.document_ids ?? []).filter((x) => x !== fileId), expectedVersion: draft.version }), on ? "Rechnung wird mit der Antwort gesendet. Bitte Antwort freigeben." : "Rechnung aus der Antwort genommen.")}
+            />
           </section>
 
           <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note }), "Gespeichert.")} />
@@ -376,7 +391,12 @@ function Outcome({ data, canEdit, onSave }: { data: CaseData; canEdit: boolean; 
   );
 }
 
-function OrderPanel({ data, canEdit, onLink }: { data: CaseData; canEdit: boolean; onLink: (body: { reference?: string; candidateId?: string }) => void }) {
+function OrderPanel({ data, canEdit, onLink, invoiceFiles, documentBase, draft, replyFiles, onFetchInvoices, onAttach }: {
+  data: CaseData; canEdit: boolean; onLink: (body: { reference?: string; candidateId?: string }) => void;
+  invoiceFiles: CaseFile[]; documentBase: string; draft: Draft | null; replyFiles: { supported: boolean; note: string };
+  onFetchInvoices: () => Promise<void> | void; onAttach: (fileId: string, on: boolean) => void;
+}) {
+  const [fetching, setFetching] = useState(false);
   const [reference, setReference] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const link = data.orderLink;
@@ -412,6 +432,38 @@ function OrderPanel({ data, canEdit, onLink }: { data: CaseData; canEdit: boolea
             erpBaseUrl: data.linkTargets?.erp_base_url,
             miraklBaseUrl: data.linkTargets?.mirakl_base_url,
           })}
+          invoices={
+            <>
+          <h4>Rechnungen</h4>
+          {order.invoices.length > 0
+            ? <ul>{order.invoices.map((inv) => <li key={inv.id} className="small">{inv.invoiceNumber ?? inv.id} · {fmtDate(inv.invoiceDate)} · {inv.paymentStatus ?? inv.status ?? "–"}</li>)}</ul>
+            : <p className="small muted">Noch keine Rechnung abgerufen.</p>}
+          {canEdit && (
+            <button disabled={fetching} onClick={async () => { setFetching(true); try { await onFetchInvoices(); } finally { setFetching(false); } }} title="Holt die Rechnungs-PDF dieser Bestellung aus weclapp (nur lesend) und lädt sie herunter.">
+              {fetching ? "Holt Rechnung …" : "Rechnung herunterladen"}
+            </button>
+          )}
+          {invoiceFiles.length > 0 && (
+            <ul className="invoice-files">
+              {invoiceFiles.map((f) => {
+                const attached = !!draft?.document_ids?.includes(f.id);
+                return (
+                  <li key={f.id} className="small">
+                    <a className="button" href={`${documentBase}/${f.id}`} download>{f.name} herunterladen</a>
+                    {canEdit && replyFiles.supported && (
+                      <label className="row" title={draft ? undefined : "Erst eine Antwort schreiben lassen, dann anhaken."}>
+                        <input type="checkbox" checked={attached} disabled={!draft || (!attached && (draft.document_ids?.length ?? 0) >= 3)} onChange={(e) => onAttach(f.id, e.target.checked)} />
+                        Als Anhang mit der Antwort senden{!draft ? " (erst Antwort schreiben lassen)" : ""}
+                      </label>
+                    )}
+                    {!replyFiles.supported && <span className="muted"> {replyFiles.note}</span>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+            </>
+          }
         />
       )}
       {canEdit && link?.status === "unique" && !searchOpen && (
@@ -427,7 +479,7 @@ function OrderPanel({ data, canEdit, onLink }: { data: CaseData; canEdit: boolea
   );
 }
 
-function OrderDetails({ order, links }: { order: OrderSnapshot; links: OrderLink[] }) {
+function OrderDetails({ order, links, invoices }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode }) {
   return (
     <div className="order">
       {links.length > 0 && (
@@ -455,7 +507,7 @@ function OrderDetails({ order, links }: { order: OrderSnapshot; links: OrderLink
               {s.parcels.map((p, i) => (
                 <li key={p.id ?? i} className="small">
                   Paket {i + 1}: {p.trackingId ?? "ohne Nummer"}{" "}
-                  {p.trackingUrl ? <a href={p.trackingUrl} target="_blank" rel="noreferrer noopener">Trackinglink</a> : <span className="muted">kein Link</span>}
+                  {trackingHref(p.trackingUrl, p.trackingId) ? <a href={trackingHref(p.trackingUrl, p.trackingId)} target="_blank" rel="noreferrer noopener">Trackinglink</a> : <span className="muted">kein Link</span>}
                   {p.source === "legacy_package_tracking" && <span className="muted"> (altes Einzelfeld)</span>}
                 </li>
               ))}
@@ -464,12 +516,7 @@ function OrderDetails({ order, links }: { order: OrderSnapshot; links: OrderLink
         </div>
       ))}
       <p className="muted small">ERP-Status ist eine Buchung in weclapp, kein Scan des Paketdienstes. Ein Trackinglink belegt weder Versand noch Zustellung.</p>
-      {order.invoices.length > 0 && (
-        <>
-          <h4>Rechnungen</h4>
-          <ul>{order.invoices.map((inv) => <li key={inv.id} className="small">{inv.invoiceNumber ?? inv.id} · {fmtDate(inv.invoiceDate)} · {inv.paymentStatus ?? inv.status ?? "–"}</li>)}</ul>
-        </>
-      )}
+      {invoices}
       <p className="muted small">Abgerufen: {fmtDate(order.retrievedAt)}</p>
     </div>
   );

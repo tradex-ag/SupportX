@@ -234,3 +234,4 @@ a.button:hover { background: var(--text); color: var(--card); }
 .status-buttons button.active i { background: currentColor; }
 .status-buttons .status-waiting.active { color: #111111; }
 .status-buttons button.active:hover:not(:disabled) { background: var(--st); }
+.invoice-files { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; } .invoice-files li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .invoice-files label.row { gap: 6px; align-items: center; }

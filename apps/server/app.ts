@@ -38,7 +38,7 @@ import { enqueue } from "../../packages/services/jobs.ts";
 import { linkOrderManually, setConversationAccount } from "../../packages/services/matching.ts";
 import { getMessageAttachment, listMessageAttachments } from "../../packages/services/attachments.ts";
 import { attachUploadedFile, deleteDocument, getDocument, listDocuments, setDraftDocuments, uploadDocument } from "../../packages/services/documents.ts";
-import { draftInvoiceReply } from "../../packages/services/invoices.ts";
+import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
 import { previewDesign, resetDesign, saveDesign, workspaceTheme } from "../../packages/services/design.ts";
 import { approveDraft, composeDraft, discardDraft, editDraft, polishDraft, queueReply, requestRedraft, resolveUncertainSend } from "../../packages/services/replies.ts";
 
@@ -213,6 +213,8 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     return editDraft(ctx, await actor(req), (req.params as { id: string }).id, body);
   });
   // "Rechnung senden": invoice PDF from weclapp as a draft with attachment; sending still needs approval and a click.
+  // "Rechnung herunterladen": invoice PDF(s) from weclapp kept with the case; sends nothing.
+  app.post("/api/w/:ws/cases/:id/invoices/fetch", async (req) => fetchCaseInvoices(ctx, await actor(req), (req.params as { id: string }).id));
   app.post("/api/w/:ws/cases/:id/invoice-reply", async (req) => draftInvoiceReply(ctx, await actor(req), (req.params as { id: string }).id));
   app.post("/api/w/:ws/cases/:id/compose", async (req) => {
     const body = parse(z.object({ instruction: z.string().min(1).max(5_000) }), req.body);

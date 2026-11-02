@@ -18,10 +18,14 @@ function assertId(id: string): void {
   if (!UUID.test(id)) throw new ServiceError(404, "NOT_FOUND", "Nicht gefunden.");
 }
 
+/** "Klärung nötig": the tab list and its counter use exactly this. Done cases ("Erledigt") never count. */
+const NEEDS_ATTENTION =
+  "c.category = 'support' AND c.status <> 'closed' AND (c.order_match_status NOT IN ('unique','pending') OR c.last_error IS NOT NULL OR EXISTS (SELECT 1 FROM outbox o WHERE o.workspace_id = c.workspace_id AND o.conversation_id = c.id AND o.state IN ('delivery_uncertain','failed')))";
+
 export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter) {
   const where = {
     open: "c.status = 'open' AND c.category = 'support'",
-    needs_attention: "c.category = 'support' AND (c.order_match_status NOT IN ('unique','pending') OR c.last_error IS NOT NULL OR EXISTS (SELECT 1 FROM outbox o WHERE o.conversation_id = c.id AND o.state IN ('delivery_uncertain','failed')))",
+    needs_attention: NEEDS_ATTENTION,
     waiting: "c.status = 'waiting' AND c.category = 'support'",
     closed: "c.status = 'closed' AND c.category = 'support'",
     info: "c.category = 'info'",
@@ -118,7 +122,7 @@ export async function caseCounts(ctx: AppContext, actor: Actor) {
   return one<{ open: number; needs_attention: number; info: number }>(
     ctx.db,
     `SELECT count(*) FILTER (WHERE c.category = 'support' AND c.status = 'open')::int AS open,
-            count(*) FILTER (WHERE c.category = 'support' AND c.status <> 'closed' AND (c.order_match_status NOT IN ('unique','pending') OR c.last_error IS NOT NULL))::int AS needs_attention,
+            count(*) FILTER (WHERE ${NEEDS_ATTENTION})::int AS needs_attention,
             count(*) FILTER (WHERE c.category = 'info')::int AS info
      FROM conversations c WHERE c.workspace_id = $1`,
     [actor.workspaceId],

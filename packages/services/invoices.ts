@@ -3,7 +3,8 @@ import { detectRisks, newestEmailText } from "../core/classify.ts";
 import { asksForInvoice } from "../core/invoice-request.ts";
 import { checkDraft, type DraftIssue } from "../core/draft-check.ts";
 import { buildOrderFacts } from "../core/facts.ts";
-import { one, withTx } from "../storage/db.ts";
+import { createHash } from "node:crypto";
+import { one, withTx, type Tx } from "../storage/db.ts";
 import { audit } from "./audit.ts";
 import { loadErpConnection, orderProviderFor, type ChannelKind } from "./connections.ts";
 import { requireRole, ServiceError, type Actor, type AppContext } from "./context.ts";
@@ -44,25 +45,16 @@ function replyText(lang: string, invoiceNumbers: string[], orderNumber: string, 
   return [en ? "Hello," : "Guten Tag,", "", middle, "", signature].join("\n");
 }
 
-/**
- * "Rechnung senden": a person clicked it. The invoice documents of the linked order
- * are fetched from the ERP (read only), stored with the case and attached to a new
- * draft from a fixed template (no AI cost). Nothing is sent: the draft goes through
- * the normal check, approval and send click, and only over the case's own route.
- * An address the customer names in the text is never used as recipient.
- */
-export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversationId: string): Promise<{ draftId: string; files: CaseFileInfo[]; attached: boolean }> {
-  requireRole(actor, ["owner", "agent"]);
-  if (!UUID.test(conversationId)) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
-  const conv = await one<{ id: string; version: number; latest_inbound_message_id: string | null; order_match_status: string; kind: ChannelKind }>(
-    ctx.db,
-    `SELECT c.id, c.version, c.latest_inbound_message_id, c.order_match_status, cc.kind FROM conversations c
-       JOIN channel_connections cc ON cc.workspace_id = c.workspace_id AND cc.id = c.connection_id
-      WHERE c.workspace_id = $1 AND c.id = $2`,
-    [actor.workspaceId, conversationId],
-  );
-  if (!conv) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
-  if (!conv.latest_inbound_message_id) throw new ServiceError(409, "NO_MESSAGE", "In diesem Fall gibt es keine Kundennachricht zum Beantworten.");
+interface InvoicePdfs {
+  linkId: string;
+  order: OrderRecord;
+  orderNumber: string;
+  invoices: InvoiceFact[];
+  pdfs: Array<{ invoice: InvoiceFact; data: Buffer }>;
+}
+
+/** Fresh from weclapp (read only): the sendable invoices of the case's linked order and their PDFs. */
+async function loadInvoicePdfs(ctx: AppContext, actor: Actor, conversationId: string): Promise<InvoicePdfs> {
   const link = await one<{ id: string; status: string; snapshot: OrderRecord | null }>(ctx.db, "SELECT id, status, snapshot FROM order_links WHERE workspace_id = $1 AND conversation_id = $2 AND is_current", [actor.workspaceId, conversationId]);
   if (!link || link.status !== "unique" || !link.snapshot) {
     const why = link?.status === "ambiguous" ? "Es passen mehrere Bestellungen." : link?.status === "pending" ? "Die Bestellung wird noch gesucht." : "Es ist keine Bestellung zugeordnet.";
@@ -81,13 +73,12 @@ export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversat
   const orderNumber = order.orderNumberAtCustomer ?? order.orderNumber ?? order.id;
   const invoices = sendableInvoices(order);
   if (invoices.length === 0) {
-    throw new ServiceError(409, "NO_INVOICE", `Zu Bestellung ${orderNumber} gibt es in weclapp noch keine Rechnung (Gutschriften und stornierte Rechnungen zählen nicht). Bitte die Rechnung in weclapp erstellen und dann erneut auf „Rechnung senden“ klicken.`);
+    throw new ServiceError(409, "NO_INVOICE", `Zu Bestellung ${orderNumber} gibt es in weclapp noch keine Rechnung (Gutschriften und stornierte Rechnungen zählen nicht). Bitte die Rechnung in weclapp erstellen und dann erneut klicken.`);
   }
   if (invoices.length > MAX_REPLY_DOCUMENTS) {
-    throw new ServiceError(409, "TOO_MANY", `Zu Bestellung ${orderNumber} gibt es ${invoices.length} Rechnungen, höchstens ${MAX_REPLY_DOCUMENTS} passen in eine Antwort. Bitte die passenden unter „Individuell“ selbst anhängen.`);
+    throw new ServiceError(409, "TOO_MANY", `Zu Bestellung ${orderNumber} gibt es ${invoices.length} Rechnungen, höchstens ${MAX_REPLY_DOCUMENTS} passen in eine Antwort. Bitte die passenden in weclapp herunterladen und unter „Datei anhängen“ selbst anhängen.`);
   }
-
-  const pdfs: Array<{ invoice: InvoiceFact; data: Buffer }> = [];
+  const pdfs: InvoicePdfs["pdfs"] = [];
   for (const invoice of invoices) {
     const label = invoice.invoiceNumber ?? invoice.id;
     let file: { data: Buffer; contentType: string };
@@ -104,6 +95,60 @@ export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversat
   if (pdfs.reduce((sum, p) => sum + p.data.length, 0) > MAX_DOCUMENT_BYTES) {
     throw new ServiceError(413, "TOO_LARGE", "Die Rechnungs-PDF ist zu groß für eine Antwort (höchstens 3 MB). Bitte in weclapp prüfen. Es wurde nichts verschickt.");
   }
+  return { linkId: link.id, order, orderNumber, invoices, pdfs };
+}
+
+/** Store the PDFs with the case; the same document fetched again is reused, not stored twice. */
+async function storeInvoices(tx: Tx, actor: Actor, conversationId: string, loaded: InvoicePdfs): Promise<CaseFileInfo[]> {
+  // The panel shows what was just read from weclapp.
+  await tx.query("UPDATE order_links SET snapshot = $3, retrieved_at = now() WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, loaded.linkId, JSON.stringify(loaded.order)]);
+  const files: CaseFileInfo[] = [];
+  for (const { invoice, data } of loaded.pdfs) {
+    const same = await one<CaseFileInfo>(
+      tx,
+      `SELECT id, name, size, content_type, source, created_at FROM documents
+        WHERE workspace_id = $1 AND conversation_id = $2 AND source = 'erp_invoice' AND external_ref = $3 AND sha256 = $4 AND deleted_at IS NULL`,
+      [actor.workspaceId, conversationId, invoice.id, createHash("sha256").update(data).digest("hex")],
+    );
+    files.push(same ?? (await storeCaseFile(tx, actor, conversationId, { name: `Rechnung ${invoice.invoiceNumber ?? invoice.id}.pdf`.replace(/[\\/]/g, "-"), contentType: "application/pdf", data, source: "erp_invoice", externalRef: invoice.id })));
+  }
+  return files;
+}
+
+/**
+ * "Rechnung herunterladen": fetch the invoice PDF(s) of the linked order from weclapp
+ * and keep them with the case, for download and to tick as attachment. Sends nothing.
+ */
+export async function fetchCaseInvoices(ctx: AppContext, actor: Actor, conversationId: string): Promise<{ files: CaseFileInfo[] }> {
+  requireRole(actor, ["owner", "agent"]);
+  if (!UUID.test(conversationId)) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+  const conv = await one(ctx.db, "SELECT 1 FROM conversations WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conversationId]);
+  if (!conv) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+  const loaded = await loadInvoicePdfs(ctx, actor, conversationId);
+  return { files: await withTx(ctx.db, (tx) => storeInvoices(tx, actor, conversationId, loaded)) };
+}
+
+/**
+ * "Rechnung senden": a person clicked it (or the workspace's invoice rule). The invoice
+ * documents of the linked order are fetched from the ERP (read only), stored with the
+ * case and attached to a new draft from a fixed template (no AI cost). Nothing is sent:
+ * the draft goes through the normal check, approval and send click, and only over the
+ * case's own route. An address the customer names in the text is never used as recipient.
+ */
+export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversationId: string): Promise<{ draftId: string; files: CaseFileInfo[]; attached: boolean }> {
+  requireRole(actor, ["owner", "agent"]);
+  if (!UUID.test(conversationId)) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+  const conv = await one<{ id: string; version: number; latest_inbound_message_id: string | null; order_match_status: string; kind: ChannelKind }>(
+    ctx.db,
+    `SELECT c.id, c.version, c.latest_inbound_message_id, c.order_match_status, cc.kind FROM conversations c
+       JOIN channel_connections cc ON cc.workspace_id = c.workspace_id AND cc.id = c.connection_id
+      WHERE c.workspace_id = $1 AND c.id = $2`,
+    [actor.workspaceId, conversationId],
+  );
+  if (!conv) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+  if (!conv.latest_inbound_message_id) throw new ServiceError(409, "NO_MESSAGE", "In diesem Fall gibt es keine Kundennachricht zum Beantworten.");
+  const loaded = await loadInvoicePdfs(ctx, actor, conversationId);
+  const { order, orderNumber, invoices } = loaded;
 
   const ws = (await one<{ reply_signature: string; default_language: string; allowed_link_prefixes: string[] }>(ctx.db, "SELECT reply_signature, default_language, allowed_link_prefixes FROM workspaces WHERE id = $1", [actor.workspaceId]))!;
   const attached = REPLY_FILES[conv.kind].supported;
@@ -128,12 +173,7 @@ export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversat
   return withTx(ctx.db, async (tx) => {
     const locked = await one<{ version: number; latest_inbound_message_id: string | null }>(tx, "SELECT version, latest_inbound_message_id FROM conversations WHERE workspace_id = $1 AND id = $2 FOR UPDATE", [actor.workspaceId, conversationId]);
     if (!locked || locked.latest_inbound_message_id !== conv.latest_inbound_message_id) throw new ServiceError(409, "VERSION_CONFLICT", "Inzwischen ist eine neue Kundennachricht da. Bitte neu laden.");
-    // The panel shows what was just read from weclapp.
-    await tx.query("UPDATE order_links SET snapshot = $3, retrieved_at = now() WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, link.id, JSON.stringify(order)]);
-    const files: CaseFileInfo[] = [];
-    for (const { invoice, data } of pdfs) {
-      files.push(await storeCaseFile(tx, actor, conversationId, { name: `Rechnung ${invoice.invoiceNumber ?? invoice.id}.pdf`.replace(/[\\/]/g, "-"), contentType: "application/pdf", data, source: "erp_invoice", externalRef: invoice.id }));
-    }
+    const files = await storeInvoices(tx, actor, conversationId, loaded);
     await tx.query("UPDATE drafts SET status = 'superseded', updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND status IN ('proposed','edited')", [actor.workspaceId, conversationId]);
     const draft = await one<{ id: string; version: number }>(
       tx,
@@ -141,7 +181,7 @@ export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversat
          cited_fact_ids, facts, missing_information, suggested_actions, risks, issues, generated_by, ai_model, prompt_version, decision)
        VALUES ($1,$2,$3,$4,$5,'invoice',$6,$7,$8,$9,'[]','["none"]','{}',$10,'rules',NULL,'invoice-v1','invoice') RETURNING id, version`,
       [
-        actor.workspaceId, conversationId, locked.version, conv.latest_inbound_message_id, link.id,
+        actor.workspaceId, conversationId, locked.version, conv.latest_inbound_message_id, loaded.linkId,
         `Rechnung aus weclapp: ${files.map((f) => f.name).join(", ")}.`, body, citedFactIds, JSON.stringify(facts), JSON.stringify(issues),
       ],
     );

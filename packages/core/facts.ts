@@ -1,3 +1,4 @@
+import { trackingHref } from "./tracking.ts";
 import type { AllowedFact, OrderRecord, ShipmentFact } from "./contracts.ts";
 
 const SHIPMENT_STATUS_DE: Readonly<Record<string, string>> = {
@@ -61,7 +62,7 @@ export function buildOrderFacts(order: OrderRecord): AllowedFact[] {
     }
     shipment.parcels.forEach((parcel, p) => {
       const parts = [parcel.trackingId ? `Sendungsnummer ${parcel.trackingId}` : "ohne Sendungsnummer"];
-      if (parcel.trackingUrl) parts.push(`Trackinglink ${parcel.trackingUrl}`);
+      if (parcel.trackingUrl) parts.push(`Trackinglink ${trackingHref(parcel.trackingUrl, parcel.trackingId)}`);
       facts.push({
         id: `shipment.${i + 1}.parcel.${p + 1}`,
         text: `${label}, Paket ${p + 1}: ${parts.join(", ")}. Ein Trackinglink allein belegt weder Versand noch Zustellung.`,
