@@ -33,6 +33,7 @@ interface CaseData {
   conversation: Rec & { topic: string | null; topic_source: string | null; waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
   messages: Array<{ id: string; direction: string; kind: string; from_address: string; from_name: string | null; reply_to: Array<{ address: string; name?: string }> | null; subject: string; body_text: string; received_at: string; has_attachments: boolean; removed_remotely_at: string | null }>;
   /** Messages of other cases of the same customer or order, for context. */
+  customerHistory?: { cases: HistoryCase[]; counts: { cases: number; refunds: number; replacements: number; returns: number } };
   relatedMessages?: Array<CaseData["messages"][number] & { conversation_id: string; conversation_subject: string }>;
   notes: Array<{ id: string; body: string; created_at: string; author: string }>;
   orderLink: null | { status: string; references_tried: string[]; candidates: Array<{ id: string; orderNumber?: string; matchedBy: string }>; external_order_id: string | null; matched_by: string | null; linked_by: string; error: string | null; snapshot: OrderSnapshot | null; retrieved_at: string | null };
@@ -63,7 +64,9 @@ const CASE_STATUS = [
   { value: "closed", label: "Erledigt" },
 ] as const;
 
-export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId: string; caseId: string; role: Role; onChanged: () => void }) {
+type HistoryCase = { id: string; subject: string; topic: string | null; status: string; outcome: string | null; source_platform: string; last_message_at: string | null; order_number: string | null };
+
+export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: { workspaceId: string; caseId: string; role: Role; onChanged: () => void; onOpenCase?: (id: string) => void }) {
   const [data, setData] = useState<CaseData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -294,6 +297,14 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
           </section>
 
           <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note }), "Gespeichert.")} />
+          <CustomerHistory history={data.customerHistory} onOpen={onOpenCase} />
+          {canEdit && (
+            <section className="card">
+              <h3>Nachweis</h3>
+              <p className="muted small">Für einen Antrag bei Amazon (A-bis-z-Garantie) oder einen eBay-Fall („nicht erhalten“, „nicht wie beschrieben“): Bestellung, Versand mit Sendungsnummern, Rechnungen und der ganze Verlauf als PDF.</p>
+              <a className="button" href={`${base}/cases/${caseId}/evidence.pdf`} download>Nachweis als PDF</a>
+            </section>
+          )}
 
           <section className="card">
             <h3>Interne Notizen</h3>
@@ -401,6 +412,36 @@ function MessageBody({ text }: { text: string }) {
       {extracted && !open ? <pre className="body">{words}</pre> : <pre className={`body${open ? "" : " folded"}`}>{text}</pre>}
       {long && <button className="link small" onClick={() => setOpen(!open)}>{open ? "Weniger anzeigen" : "Ganze Nachricht anzeigen"}</button>}
     </>
+  );
+}
+
+const STATUS_LABEL: Record<string, string> = { open: "offen", waiting: "wartet", closed: "erledigt" };
+
+/** Earlier cases of this customer (same address or same weclapp customer). */
+function CustomerHistory({ history, onOpen }: { history: CaseData["customerHistory"]; onOpen?: (id: string) => void }) {
+  if (!history) return null;
+  const { cases, counts } = history;
+  const done = [counts.refunds && `${counts.refunds} × erstattet`, counts.replacements && `${counts.replacements} × Ersatz`, counts.returns && `${counts.returns} × Rücksendung`].filter(Boolean);
+  return (
+    <section className="card">
+      <h3>Kundenhistorie</h3>
+      {cases.length === 0 ? <p className="muted small">Erster Fall dieses Kunden in SupportX.</p> : (
+        <>
+          <p className="small">{cases.length === 1 ? "1 früherer Fall" : `${cases.length} frühere Fälle`}{done.length > 0 ? ` · ${done.join(" · ")}` : ""}</p>
+          <ul className="history-cases">
+            {cases.map((h) => (
+              <li key={h.id}>
+                <button className="link" onClick={() => onOpen?.(h.id)} disabled={!onOpen}>{h.subject || "(ohne Betreff)"}</button>
+                <span className="muted small">
+                  {[h.last_message_at ? fmtDate(h.last_message_at) : null, PLATFORM_LABEL[h.source_platform] ?? h.source_platform, h.order_number, h.topic ? INTENT_LABEL[h.topic] ?? h.topic : null, STATUS_LABEL[h.status] ?? h.status, h.outcome ? OUTCOME_LABEL[h.outcome] : null].filter(Boolean).join(" · ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="muted small">Gleiche Absenderadresse oder gleicher Kunde in weclapp.</p>
+    </section>
   );
 }
 

@@ -42,6 +42,9 @@ import { getMessageAttachment, listMessageAttachments } from "../../packages/ser
 import { attachUploadedFile, deleteDocument, getDocument, listDocuments, setDraftDocuments, uploadDocument } from "../../packages/services/documents.ts";
 import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
 import { previewDesign, resetDesign, saveDesign, workspaceTheme } from "../../packages/services/design.ts";
+import { approveAndSendMany, batchCandidates } from "../../packages/services/batch.ts";
+import { supportReport } from "../../packages/services/reports.ts";
+import { evidencePdf } from "../../packages/services/evidence.ts";
 import { approveDraft, composeDraft, discardDraft, editDraft, polishDraft, queueReply, renderSnippet, requestRedraft, resolveUncertainSend, snippetDraft } from "../../packages/services/replies.ts";
 
 const SESSION_COOKIE = "supportx_session";
@@ -297,6 +300,27 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.post("/api/w/:ws/drafts/:id/approve", async (req) => {
     const body = parse(z.object({ expectedVersion: z.number().int().positive(), acknowledgeWarnings: z.boolean().default(false) }), req.body);
     return { approvalId: await approveDraft(ctx, await actor(req), (req.params as { id: string }).id, body) };
+  });
+  app.get("/api/w/:ws/cases/:id/evidence.pdf", async (req, reply) => {
+    const pdf = await evidencePdf(ctx, await actor(req), (req.params as { id: string }).id);
+    return reply
+      .type("application/pdf")
+      .header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(pdf.name)}`)
+      .header("Content-Security-Policy", "default-src 'none'; sandbox")
+      .header("Cache-Control", "private, no-store")
+      .send(pdf.data);
+  });
+  app.get("/api/w/:ws/report", async (req) => {
+    const q = parse(z.object({ days: z.coerce.number().int().default(30) }), req.query);
+    return await supportReport(ctx, await actor(req), q.days);
+  });
+  app.post("/api/w/:ws/batch/candidates", async (req) => {
+    const body = parse(z.object({ conversationIds: z.array(z.string()).max(50) }), req.body);
+    return { items: await batchCandidates(ctx, await actor(req), body.conversationIds) };
+  });
+  app.post("/api/w/:ws/batch/approve-send", async (req) => {
+    const body = parse(z.object({ items: z.array(z.object({ draftId: z.string(), expectedVersion: z.number().int().positive() })).min(1).max(50) }), req.body);
+    return { results: await approveAndSendMany(ctx, await actor(req), body.items) };
   });
   app.post("/api/w/:ws/approvals/:id/send", async (req) => ({ outboxId: await queueReply(ctx, await actor(req), (req.params as { id: string }).id) }));
   app.post("/api/w/:ws/outbox/:id/resolve", async (req) => {

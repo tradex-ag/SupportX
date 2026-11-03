@@ -10,7 +10,7 @@ import { invoiceSummary } from "./invoices.ts";
 import { OWN_COPY_REASON, ownCopyText } from "../core/category.ts";
 import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
-import { MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
+import { deadlineState, MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
 import { TOPICS } from "../core/topic.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
@@ -142,6 +142,7 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
       LIMIT 50`,
     [ws, conversationId, c.customer_address, JSON.stringify(Array.isArray(c.order_references) ? c.order_references : []), OWN_COPY_REASON],
   );
+  const customerHistory = await customerHistoryFor(ctx, ws, conversationId, c.customer_address, (orderLink as { status: string; snapshot: OrderRecord | null } | null));
   // Amazon's copies of what we wrote (also from Seller Central) show as our answer, with only our text.
   for (const m of related as Array<{ own_copy: boolean; body_text: string; direction: string; kind: string }>) {
     if (!m.own_copy) continue;
@@ -163,12 +164,36 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const replyFiles = REPLY_FILES[(conversation as { connection_kind: ChannelKind }).connection_kind] ?? { supported: false, note: "" };
   const caseFiles = await listCaseFiles(ctx, actor, conversationId);
   const invoices = invoiceSummary(link?.status === "unique" ? link.snapshot : null);
-  return { conversation, messages, relatedMessages: related.reverse(), notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices };
+  return { conversation, messages, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices };
+}
+
+/**
+ * Earlier cases of the same customer: same sender address or the same weclapp customer
+ * (from the matched orders). With topic, status and what was done, so a refund or a
+ * replacement last month is visible before deciding again.
+ */
+async function customerHistoryFor(ctx: AppContext, ws: string, conversationId: string, address: string | null, link: { status: string; snapshot: OrderRecord | null } | null) {
+  const customerId = link?.status === "unique" ? link.snapshot?.customerId ?? null : null;
+  if (!address && !customerId) return { cases: [], counts: { cases: 0, refunds: 0, replacements: 0, returns: 0 } };
+  const cases = await many<{ id: string; subject: string; topic: string | null; status: string; outcome: string | null; source_platform: string; last_message_at: Date | null; order_number: string | null }>(
+    ctx.db,
+    `SELECT o.id, o.subject, o.topic, o.status, o.outcome, o.source_platform, o.last_message_at,
+            (SELECT coalesce(l.snapshot->>'orderNumberAtCustomer', l.snapshot->>'orderNumber') FROM order_links l WHERE l.workspace_id = o.workspace_id AND l.conversation_id = o.id AND l.is_current AND l.status = 'unique') AS order_number
+       FROM conversations o
+      WHERE o.workspace_id = $1 AND o.id <> $2 AND o.category = 'support'
+        AND (($3::text IS NOT NULL AND lower(o.customer_address) = lower($3))
+          OR ($4::text IS NOT NULL AND EXISTS (SELECT 1 FROM order_links l WHERE l.workspace_id = o.workspace_id AND l.conversation_id = o.id AND l.is_current AND l.status = 'unique' AND l.snapshot->>'customerId' = $4)))
+      ORDER BY o.last_message_at DESC NULLS LAST
+      LIMIT 20`,
+    [ws, conversationId, address, customerId],
+  );
+  const count = (...o: string[]) => cases.filter((x) => x.outcome && o.includes(x.outcome)).length;
+  return { cases, counts: { cases: cases.length, refunds: count("refund", "partial_refund"), replacements: count("replacement"), returns: count("return") } };
 }
 
 /** Counts for the inbox tabs. */
 export async function caseCounts(ctx: AppContext, actor: Actor) {
-  return one<{ open: number; needs_attention: number; info: number }>(
+  const counts = await one<{ open: number; needs_attention: number; info: number }>(
     ctx.db,
     `SELECT count(*) FILTER (WHERE c.category = 'support' AND c.status = 'open')::int AS open,
             count(*) FILTER (WHERE ${NEEDS_ATTENTION})::int AS needs_attention,
@@ -176,6 +201,17 @@ export async function caseCounts(ctx: AppContext, actor: Actor) {
      FROM conversations c WHERE c.workspace_id = $1`,
     [actor.workspaceId],
   );
+  // Open cases whose reply deadline is red (overdue or only a few hours left).
+  const clocks = await many<{ waiting_since: Date | null; reply_hours: number | null }>(
+    ctx.db,
+    `SELECT ${WAITING_SINCE} AS waiting_since, ${REPLY_HOURS} AS reply_hours
+       FROM conversations c JOIN workspaces w ON w.id = c.workspace_id
+      WHERE c.workspace_id = $1 AND c.category = 'support' AND c.status = 'open' AND ${REPLY_HOURS} IS NOT NULL`,
+    [actor.workspaceId],
+  );
+  const now = new Date();
+  const urgent = clocks.filter((x) => deadlineState(x.waiting_since, x.reply_hours, now)?.tone === "bad").length;
+  return { ...counts!, urgent };
 }
 
 /**

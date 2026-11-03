@@ -261,3 +261,17 @@ a.button:hover { background: var(--text); color: var(--card); }
 .case-search select.active { border-color: var(--text); font-weight: 500; }
 .topic-pick { display: inline-flex; align-items: center; gap: 8px; }
 .topic-pick select { min-height: 28px; }
+
+.history-cases { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.history-cases li { display: grid; gap: 2px; }
+.history-cases .link { text-align: left; }
+
+.case-item .pick { margin: 0 8px 0 0; vertical-align: middle; width: 16px; height: 16px; }
+.batch .card.dimmed { opacity: 0.6; }
+.batch .case-head .row { gap: 8px; margin-top: 8px; }
+
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1%; white-space: nowrap; }
+.report .settings-title { justify-content: space-between; align-items: center; }
+.report .settings-title h2 { margin: 0; }
+
+.deadline-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 0; }

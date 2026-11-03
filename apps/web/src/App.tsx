@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api.ts";
 import { Inbox } from "./Inbox.tsx";
+import { Report } from "./Report.tsx";
 import { Settings } from "./Settings.tsx";
 
 interface Me {
@@ -57,7 +58,7 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [view, setView] = useState<"inbox" | "settings">("inbox");
+  const [view, setView] = useState<"inbox" | "report" | "settings">("inbox");
 
   const load = useCallback(async () => {
     try {
@@ -120,6 +121,7 @@ export function App() {
         )}
         <nav>
           <button className={view === "inbox" ? "tab active" : "tab"} onClick={() => setView("inbox")}>Posteingang</button>
+          <button className={view === "report" ? "tab active" : "tab"} onClick={() => setView("report")}>Auswertung</button>
           <button className={view === "settings" ? "tab active" : "tab"} onClick={() => setView("settings")}>Einstellungen</button>
         </nav>
         <span className={me.sendMode === "enabled" ? "pill warn" : "pill muted"} title="Installationsweiter Versandmodus">
@@ -134,6 +136,8 @@ export function App() {
         <div className="center muted">Kein Arbeitsbereich zugeordnet.</div>
       ) : view === "inbox" ? (
         <Inbox workspaceId={workspace.id} role={workspace.role} />
+      ) : view === "report" ? (
+        <Report workspaceId={workspace.id} />
       ) : (
         <Settings workspaceId={workspace.id} role={workspace.role} />
       )}

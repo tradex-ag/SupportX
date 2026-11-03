@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmtDate, MATCH_LABEL, OUTBOX_LABEL, PLATFORM_LABEL } from "./api.ts";
+import { BatchApprove } from "./BatchApprove.tsx";
 import { CaseView } from "./CaseView.tsx";
 import { deadlineState } from "../../../packages/core/deadline.ts";
 
@@ -38,7 +39,7 @@ const FILTERS = [
   { id: "info", label: "Werbung & Infos", count: "info" },
   { id: "all", label: "Alle", count: null },
 ] as const;
-type Counts = { open: number; needs_attention: number; info: number };
+type Counts = { open: number; needs_attention: number; info: number; urgent: number };
 
 /** One short line saying where the case stands, instead of a row of badges. */
 function caseState(c: CaseRow): { text: string; tone: "ok" | "warn" | "bad" | "muted" } {
@@ -78,6 +79,9 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [topic, setTopic] = useState("");
+  // Ready replies ticked for approving several at once.
+  const [picked, setPicked] = useState<string[]>([]);
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   // Search after a short pause in typing, not on every key.
   useEffect(() => {
     const t = setTimeout(() => setQuery(search.trim().length >= 2 ? search.trim() : ""), 300);
@@ -95,6 +99,35 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
       setError((err as Error).message);
     }
   }, [workspaceId, filter, query, topic]);
+  const urgent = counts?.urgent ?? 0;
+  const [notify, setNotify] = useState(() => {
+    try { return localStorage.getItem("supportx.notifyDeadline") === "1" && typeof Notification !== "undefined" && Notification.permission === "granted"; } catch { return false; }
+  });
+  const lastUrgent = useRef<number | null>(null);
+  // Tab title shows the cases with a red deadline; a browser notice when one more turns red.
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\) /, "");
+    document.title = urgent > 0 ? `(${urgent}) ${base}` : base;
+    if (counts && notify && lastUrgent.current !== null && urgent > lastUrgent.current) {
+      try {
+        new Notification("SupportX: Antwortfrist", { body: urgent === 1 ? "1 Fall muss bald beantwortet werden." : `${urgent} Fälle müssen bald beantwortet werden.`, tag: "supportx-deadline" });
+      } catch { /* not supported here */ }
+    }
+    if (counts) lastUrgent.current = urgent;
+  }, [urgent, counts, notify]);
+  const switchNotify = async () => {
+    if (notify) {
+      setNotify(false);
+      try { localStorage.removeItem("supportx.notifyDeadline"); } catch { /* ignore */ }
+      return;
+    }
+    if (typeof Notification === "undefined") return setError("Dieser Browser kann keine Benachrichtigungen anzeigen.");
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return setError("Benachrichtigungen sind im Browser nicht erlaubt.");
+    setNotify(true);
+    try { localStorage.setItem("supportx.notifyDeadline", "1"); } catch { /* ignore */ }
+  };
+
   // Re-draw the countdowns every minute even when nothing new arrives.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -127,6 +160,10 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
           ))}
         </div>
         </div>
+        <div className="deadline-bar small pad">
+          {urgent > 0 ? <span className="deadline bad"><i aria-hidden="true" />{urgent === 1 ? "1 Fall mit knapper Frist" : `${urgent} Fälle mit knapper Frist`}</span> : <span className="muted">Keine Frist knapp</span>}
+          <button className="link" onClick={switchNotify} title="Zeigt eine Browser-Benachrichtigung, solange SupportX in einem Tab offen ist.">{notify ? "Benachrichtigung aus" : "Benachrichtigen"}</button>
+        </div>
         {query && <p className="muted small pad">{cases.length === 200 ? "Mehr als 200" : cases.length} {cases.length === 1 ? "Treffer" : "Treffer"} für „{query}“ in allen Fällen. <button className="link" onClick={() => setSearch("")}>Suche löschen</button></p>}
         {!query && filter === "info" && <p className="muted small pad">Newsletter, Aktionen und Partner-Infos. Sie bekommen keinen Antwortentwurf. Ist eine Kundenanfrage dabei, im Fall auf „Ist eine Kundenanfrage“ klicken.</p>}
         {error && <p className="error pad">{error}</p>}
@@ -135,13 +172,17 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
           {cases.map((c) => {
             const state = caseState(c);
             const due = deadlineState(c.waiting_since, c.reply_hours);
+            const pickable = role !== "viewer" && c.category === "support" && c.status !== "closed" && (c.draft_status === "proposed" || c.draft_status === "edited");
             return (
               <li key={c.id} className={selected === c.id ? "case-item selected" : "case-item"} onClick={() => setSelected(c.id)}>
                 <div className="row">
                   <span className="muted small ellipsis">{c.customer_name || c.customer_address}</span>
                   <span className="muted small nowrap">{fmtDate(c.last_message_at)}</span>
                 </div>
-                <div className="subject">{c.subject || "(ohne Betreff)"}</div>
+                <div className="subject">
+                  {pickable && <input type="checkbox" className="pick" checked={picked.includes(c.id)} aria-label="Für gemeinsame Freigabe auswählen" title="Für gemeinsame Freigabe auswählen" onClick={(e) => e.stopPropagation()} onChange={() => toggle(c.id)} />}
+                  {c.subject || "(ohne Betreff)"}
+                </div>
                 <div className="row wrap small">
                   <span className="tag">{PLATFORM_LABEL[c.source_platform] ?? c.source_platform}</span>
                   {c.category === "support" && (c.topic ?? c.intent) && <span className="muted">{INTENT_LABEL[(c.topic ?? c.intent)!] ?? c.topic ?? c.intent}</span>}
@@ -155,7 +196,8 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
         </ul>
       </aside>
       <main className="case-detail">
-        {selected ? <CaseView key={selected} workspaceId={workspaceId} caseId={selected} role={role} onChanged={load} /> : <div className="center muted">Fall auswählen</div>}
+        {picked.length > 0 ? <BatchApprove workspaceId={workspaceId} ids={picked} onDone={load} onOpen={(id) => { setPicked([]); setSelected(id); }} onClear={() => setPicked([])} />
+          : selected ? <CaseView key={selected} workspaceId={workspaceId} caseId={selected} role={role} onChanged={load} onOpenCase={setSelected} /> : <div className="center muted">Fall auswählen</div>}
       </main>
     </div>
   );
