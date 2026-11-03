@@ -85,7 +85,7 @@ export function titleHintsFor(order: OrderRecord | null, latestCustomerText: str
   return checkTitles(customerText(latestCustomerText), order.lines.map((l) => ({ position: l.position, title: l.title, articleName: l.articleName }))).map((h) => h.text);
 }
 
-export async function generateDraft(ctx: AppContext, workspaceId: string, conversationId: string, decision?: ReplyDecision): Promise<string | null> {
+export async function generateDraft(ctx: AppContext, workspaceId: string, conversationId: string, decision?: ReplyDecision, opts: { rulesOnly?: boolean } = {}): Promise<string | null> {
   const conv = await loadConversation(ctx.db, workspaceId, conversationId);
   if (!conv.latest_inbound_message_id) return null;
   const ws = (await one<WorkspaceRow>(ctx.db, "SELECT reply_signature, reply_tone, default_language, allowed_link_prefixes, ai_enabled, ai_secret_id FROM workspaces WHERE id = $1", [workspaceId]))!;
@@ -110,7 +110,8 @@ export async function generateDraft(ctx: AppContext, workspaceId: string, conver
   };
 
   // The workspace's own Claude key wins over the installation's provider.
-  const provider = await providerFor(ctx, ws, workspaceId);
+  // Automations always use the fixed templates: no AI, no cost.
+  const provider = opts.rulesOnly ? new RulesProvider() : await providerFor(ctx, ws, workspaceId);
   let proposal: Proposal;
   let generatedBy = provider.id;
   let model: string | null = provider.model;
@@ -162,6 +163,8 @@ export async function generateDraft(ctx: AppContext, workspaceId: string, conver
       ],
     );
     await tx.query("UPDATE conversations SET last_error = $3 WHERE workspace_id = $1 AND id = $2", [workspaceId, conversationId, providerNote]);
+    // An AI draft refines the topic sorted on arrival; a person's choice stays.
+    if (generatedBy !== "rules") await tx.query("UPDATE conversations SET topic = $3, topic_source = 'ai' WHERE workspace_id = $1 AND id = $2 AND topic_source IS DISTINCT FROM 'person'", [workspaceId, conversationId, proposal.intent]);
     await audit(tx, { type: "system", workspaceId }, "draft.generated", "draft", draft!.id, { provider: generatedBy, model, intent: proposal.intent, blocking: hasBlockingIssue(issues) });
     return draft!.id;
   });

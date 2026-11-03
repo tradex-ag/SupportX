@@ -24,6 +24,7 @@ interface CaseRow {
   outbox_state: string | null;
   message_count: number;
   snooze_until: string | null;
+  topic: string | null;
   open_by: string | null;
   waiting_since: string | null;
   reply_hours: number | null;
@@ -76,6 +77,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [topic, setTopic] = useState("");
   // Search after a short pause in typing, not on every key.
   useEffect(() => {
     const t = setTimeout(() => setQuery(search.trim().length >= 2 ? search.trim() : ""), 300);
@@ -84,7 +86,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
 
   const load = useCallback(async () => {
     try {
-      const q = query ? `&q=${encodeURIComponent(query)}` : "";
+      const q = (query ? `&q=${encodeURIComponent(query)}` : "") + (topic ? `&topic=${topic}` : "");
       const data = await api<{ cases: CaseRow[]; counts: Counts }>("GET", `/api/w/${workspaceId}/cases?filter=${filter}${q}`);
       setCases(data.cases);
       setCounts(data.counts);
@@ -92,7 +94,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [workspaceId, filter, query]);
+  }, [workspaceId, filter, query, topic]);
   // Re-draw the countdowns every minute even when nothing new arrives.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -112,6 +114,10 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
         <div className="list-head">
         <div className="case-search">
           <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Suchen: Bestellnummer, Name, Mail, Text …" aria-label="Fälle durchsuchen" />
+          <select value={topic} onChange={(e) => { setTopic(e.target.value); setSelected(null); }} aria-label="Nach Anliegen filtern" className={topic ? "active" : ""}>
+            <option value="">Alle Anliegen</option>
+            {Object.entries(INTENT_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
         </div>
         <div className={query ? "filters dimmed" : "filters"}>
           {FILTERS.map((f) => (
@@ -138,7 +144,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
                 <div className="subject">{c.subject || "(ohne Betreff)"}</div>
                 <div className="row wrap small">
                   <span className="tag">{PLATFORM_LABEL[c.source_platform] ?? c.source_platform}</span>
-                  {c.category === "support" && c.intent && <span className="muted">{INTENT_LABEL[c.intent] ?? c.intent}</span>}
+                  {c.category === "support" && (c.topic ?? c.intent) && <span className="muted">{INTENT_LABEL[(c.topic ?? c.intent)!] ?? c.topic ?? c.intent}</span>}
                   <span className={`state ${state.tone}`}>{state.text}</span>
                   {due && <span className={`deadline ${due.tone}`} title={`Antwort fällig bis ${fmtDate(due.dueAt.toISOString())} (${c.reply_hours} Std. ab der Kundennachricht)`}><i aria-hidden="true" />{due.label}</span>}
                 </div>

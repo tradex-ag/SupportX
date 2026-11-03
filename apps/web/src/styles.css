@@ -256,3 +256,8 @@ a.button:hover { background: var(--text); color: var(--card); }
 .snippet-form input { width: 100%; box-sizing: border-box; }
 .deadline-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin: 8px 0; }
 .deadline-grid input { width: 90px; }
+.case-search { display: flex; gap: 6px; }
+.case-search select { flex: none; max-width: 150px; }
+.case-search select.active { border-color: var(--text); font-weight: 500; }
+.topic-pick { display: inline-flex; align-items: center; gap: 8px; }
+.topic-pick select { min-height: 28px; }

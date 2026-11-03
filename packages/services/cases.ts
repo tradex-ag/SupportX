@@ -11,6 +11,7 @@ import { OWN_COPY_REASON, ownCopyText } from "../core/category.ts";
 import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
+import { TOPICS } from "../core/topic.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
 
@@ -48,7 +49,8 @@ function likePattern(q: string): string {
   return `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
 }
 
-export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter, query?: string) {
+export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter, query?: string, topic?: string) {
+  if (topic && !(TOPICS as readonly string[]).includes(topic)) throw new ServiceError(400, "INVALID", "Unbekanntes Anliegen.");
   const q = query?.trim().slice(0, 100) ?? "";
   if (q.length === 1) throw new ServiceError(400, "INVALID", "Bitte mindestens zwei Zeichen eingeben.");
   // A search looks through every case, whatever tab is open.
@@ -72,7 +74,7 @@ export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilte
   return many(
     ctx.db,
     `SELECT * FROM (
-       SELECT c.id, c.subject, c.status, c.category, c.category_reason, c.source_platform, c.customer_address, c.customer_name, c.order_match_status, c.last_message_at, c.last_error, c.snooze_until,
+       SELECT c.id, c.subject, c.status, c.category, c.category_reason, c.source_platform, c.customer_address, c.customer_name, c.order_match_status, c.last_message_at, c.last_error, c.snooze_until, c.topic, c.topic_source,
               ma.name AS merchant_account_name, cc.display_name AS connection_name, cc.kind AS connection_kind, u.display_name AS assignee_name,
               (SELECT d.status FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS draft_status,
               (SELECT d.intent FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS intent,
@@ -88,10 +90,10 @@ export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilte
        LEFT JOIN merchant_accounts ma ON ma.id = c.merchant_account_id
        LEFT JOIN users u ON u.id = c.assignee_user_id
        CROSS JOIN LATERAL (SELECT ${WAITING_SINCE} AS waiting_since) ws
-       WHERE c.workspace_id = $1 AND ${where} AND ${search}
+       WHERE c.workspace_id = $1 AND ${where} AND ${search} AND ($4::text IS NULL OR c.topic = $4)
      ) x
      ORDER BY ${order} LIMIT 200`,
-    [actor.workspaceId, actor.type === "user" ? actor.userId : null, q ? likePattern(q) : null],
+    [actor.workspaceId, actor.type === "user" ? actor.userId : null, q ? likePattern(q) : null, topic || null],
   );
 }
 
@@ -374,7 +376,7 @@ export async function assign(ctx: AppContext, actor: Actor, conversationId: stri
 export async function getSettings(ctx: AppContext, actor: Actor) {
   const ws = actor.workspaceId;
   const [workspace, accounts, connections, rules, routes, erp, categoryRules, jobs] = await Promise.all([
-    one(ctx.db, "SELECT id, name, reply_signature, reply_tone, default_language, allowed_link_prefixes, ai_enabled, auto_invoice, ai_secret_id IS NOT NULL AS has_ai_key, ai_key_hint, setup_confirmations, reply_deadlines FROM workspaces WHERE id = $1", [ws]),
+    one(ctx.db, "SELECT id, name, reply_signature, reply_tone, default_language, allowed_link_prefixes, ai_enabled, auto_invoice, ai_secret_id IS NOT NULL AS has_ai_key, ai_key_hint, setup_confirmations, reply_deadlines, automations FROM workspaces WHERE id = $1", [ws]),
     many(ctx.db, "SELECT id, name, platform, order_scope_field, order_scope_value, paused FROM merchant_accounts WHERE workspace_id = $1 ORDER BY name", [ws]),
     many(ctx.db, "SELECT id, kind, display_name, config - 'clientState' - 'secretHint' - 'oauthStateHash' - 'oauthStateExpiresAt' - 'oauthStateUserId' AS config, secret_id IS NOT NULL AS has_secret, default_merchant_account_id, default_source_platform, send_enabled, paused, health, last_sync_at, last_error FROM channel_connections WHERE workspace_id = $1 ORDER BY display_name", [ws]),
     many(ctx.db, "SELECT r.id, r.connection_id, r.priority, r.match_type, r.pattern, r.source_platform, r.merchant_account_id, ma.name AS merchant_account_name FROM routing_rules r LEFT JOIN merchant_accounts ma ON ma.id = r.merchant_account_id WHERE r.workspace_id = $1 ORDER BY r.priority, r.pattern", [ws]),

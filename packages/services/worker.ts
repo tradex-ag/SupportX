@@ -1,4 +1,5 @@
 import { autoInvoice } from "./invoices.ts";
+import { autoParcelStatus, classifyCaseTopic, sortUnsortedCases } from "./automation.ts";
 import { AiProviderError } from "../ai/index.ts";
 import { many } from "../storage/db.ts";
 import { reopenDueFollowUps } from "./cases.ts";
@@ -53,8 +54,10 @@ export async function runJob(ctx: AppContext, job: JobRow): Promise<void> {
       return;
     case "case.enrich":
       await enrichConversation(ctx, ws, p.conversationId!);
-      // Invoice requests: only when the workspace switched it on (no AI, fixed template).
+      await classifyCaseTopic(ctx, ws, p.conversationId!);
+      // Invoice requests and parcel questions: only when the workspace switched it on (no AI, fixed template).
       await autoInvoice(ctx, ws, p.conversationId!);
+      await autoParcelStatus(ctx, ws, p.conversationId!);
       return;
     case "case.draft":
       await generateDraft(ctx, ws, p.conversationId!, p.decision as ReplyDecision | undefined);
@@ -122,4 +125,5 @@ export async function scheduleTick(ctx: AppContext): Promise<void> {
   }
   await sweepStaleDispatches(ctx);
   await reopenDueFollowUps(ctx);
+  await sortUnsortedCases(ctx);
 }

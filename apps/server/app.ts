@@ -10,6 +10,7 @@ import { one } from "../../packages/storage/db.ts";
 import { DEFAULT_THEME, parseTheme, publicTheme, themeCss, type Theme } from "../../packages/core/theme.ts";
 import { actorFor, changePassword, login, logout, userForSession, workspacesFor } from "../../packages/services/auth.ts";
 import { deleteSnippet, listSnippets, saveSnippet } from "../../packages/services/snippets.ts";
+import { setAutomation, setCaseTopic } from "../../packages/services/automation.ts";
 import { addNote, assign, caseCounts, checkWorkspaceAiKey, deleteCategoryRule, exportCasesCsv, getCase, getSettings, leavePresence, listCases, setCaseCategory, touchPresence, setOutcome, setStatus, setSetupConfirmation, setWorkspaceAiKey, updateWorkspaceSettings, type CaseFilter } from "../../packages/services/cases.ts";
 import {
   addRoutingRule,
@@ -144,8 +145,9 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.get("/api/w/:ws/cases", async (req) => {
     const filter = parse(z.enum(["open", "needs_attention", "waiting", "closed", "info", "all"]).default("open"), (req.query as { filter?: string }).filter) as CaseFilter;
     const q = parse(z.string().max(100).optional(), (req.query as { q?: string }).q);
+    const topic = parse(z.string().max(40).optional(), (req.query as { topic?: string }).topic);
     const a = await actor(req);
-    return { cases: await listCases(ctx, a, filter, q), counts: await caseCounts(ctx, a) };
+    return { cases: await listCases(ctx, a, filter, q, topic), counts: await caseCounts(ctx, a) };
   });
   app.post("/api/w/:ws/cases/:id/category", async (req) => {
     const body = parse(z.object({ category: z.enum(["support", "info"]), remember: z.enum(["none", "address", "domain"]).optional() }), req.body);
@@ -177,6 +179,14 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.post("/api/w/:ws/cases/:id/status", async (req) => {
     const body = parse(z.object({ status: z.string(), snoozeUntil: z.string().max(40).nullable().optional() }), req.body);
     await setStatus(ctx, await actor(req), (req.params as { id: string }).id, body.status, body.snoozeUntil);
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/cases/:id/topic", async (req) => {
+    await setCaseTopic(ctx, await actor(req), (req.params as { id: string }).id, parse(z.object({ topic: z.string().max(40).nullable() }), req.body).topic);
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/automations", async (req) => {
+    await setAutomation(ctx, await actor(req), parse(z.object({ topic: z.string().max(40), mode: z.string().max(10) }), req.body));
     return { ok: true };
   });
   app.post("/api/w/:ws/cases/:id/presence", async (req) => {

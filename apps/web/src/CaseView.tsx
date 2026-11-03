@@ -30,7 +30,7 @@ interface OrderSnapshot {
 }
 interface CaseData {
   linkTargets?: { erp_base_url: string | null; mirakl_base_url: string | null } | null;
-  conversation: Rec & { waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
+  conversation: Rec & { topic: string | null; topic_source: string | null; waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
   messages: Array<{ id: string; direction: string; kind: string; from_address: string; from_name: string | null; reply_to: Array<{ address: string; name?: string }> | null; subject: string; body_text: string; received_at: string; has_attachments: boolean; removed_remotely_at: string | null }>;
   /** Messages of other cases of the same customer or order, for context. */
   relatedMessages?: Array<CaseData["messages"][number] & { conversation_id: string; conversation_subject: string }>;
@@ -203,7 +203,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
       {c.category !== "support" ? messages : (
       <div className="case-layout">
         <div className="case-main">
-          <Concern data={data} draft={draft} />
+          <Concern data={data} draft={draft} canEdit={canEdit} onTopic={(topic) => act(() => api("POST", `${base}/cases/${caseId}/topic`, { topic }), topic ? "Anliegen gespeichert." : "Anliegen wird wieder automatisch erkannt.")} />
 
           {messages}
 
@@ -320,7 +320,9 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
 }
 
 /** What the customer wants, on top: topic, the AI's one-line summary if there is one, and the customer's own words. */
-function Concern({ data, draft }: { data: CaseData; draft: Draft | null }) {
+const TOPIC_SOURCE: Record<string, string> = { auto: "automatisch erkannt", ai: "von der KI erkannt", person: "von Hand gesetzt" };
+
+function Concern({ data, draft, canEdit, onTopic }: { data: CaseData; draft: Draft | null; canEdit: boolean; onTopic: (topic: string | null) => void }) {
   const inbound = [...data.messages].reverse().find((m) => m.direction === "inbound");
   if (!inbound) return null;
   const words = customerText(inbound.body_text);
@@ -329,7 +331,21 @@ function Concern({ data, draft }: { data: CaseData; draft: Draft | null }) {
     <section className="card concern">
       <div className="row wrap">
         <h3>Anliegen</h3>
-        {draft?.intent && <span className="pill muted">{INTENT_LABEL[draft.intent] ?? draft.intent}</span>}
+        {(() => {
+          const c = data.conversation;
+          const topic = c.topic ?? draft?.intent ?? null;
+          if (!canEdit) return topic ? <span className="pill muted">{INTENT_LABEL[topic] ?? topic}</span> : null;
+          return (
+            <span className="topic-pick small">
+              <select value={topic ?? ""} onChange={(e) => onTopic(e.target.value || null)} aria-label="Anliegen">
+                {!topic && <option value="">noch nicht erkannt</option>}
+                {Object.entries(INTENT_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              {c.topic_source && <span className="muted">{TOPIC_SOURCE[c.topic_source] ?? c.topic_source}</span>}
+              {c.topic_source === "person" && <button className="link" onClick={() => onTopic(null)}>automatisch</button>}
+            </span>
+          );
+        })()}
       </div>
       {aiSummary && <p>{aiSummary}</p>}
       {words && <blockquote>{shortText(words, 600)}</blockquote>}

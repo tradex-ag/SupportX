@@ -20,7 +20,7 @@ interface Rule { id: string; connection_id: string; priority: number; match_type
 interface Route { id: string; connection_id: string; source_platform: string; evidence_note: string; verified_at: string; verified_by: string | null }
 interface Descriptor { platform: string; label: string; transport: string; implementation: string; receive: string; reply: string; accountTestNeeded: string[]; notes: string }
 interface SettingsData {
-  workspace: { name: string; auto_invoice?: "off" | "draft" | "send"; reply_signature: string; reply_tone: string; allowed_link_prefixes: string[]; ai_enabled: boolean; has_ai_key: boolean; ai_key_hint: string | null; setup_confirmations: Record<string, { at: string; by: string | null }>; reply_deadlines?: Record<string, number> };
+  workspace: { name: string; auto_invoice?: "off" | "draft" | "send"; reply_signature: string; reply_tone: string; allowed_link_prefixes: string[]; ai_enabled: boolean; has_ai_key: boolean; ai_key_hint: string | null; setup_confirmations: Record<string, { at: string; by: string | null }>; reply_deadlines?: Record<string, number>; automations?: Record<string, { mode: "off" | "draft" | "send"; since: string | null }> };
   accounts: Account[]; connections: Connection[]; rules: Rule[]; routes: Route[];
   erp: null | { base_url: string; search_fields: string[]; has_secret: boolean; status: string; last_checked_at: string | null; last_error: string | null };
   categoryRules: Array<{ id: string; match_type: string; pattern: string; category: "support" | "info" }>;
@@ -173,6 +173,7 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
 
       <DocumentsCard base={base} owner={owner} />
       <AutoInvoiceCard value={data.workspace.auto_invoice ?? "off"} owner={owner} onChange={(autoInvoice) => void act(() => api("PUT", `${base}/settings`, { autoInvoice }), () => "Gespeichert.")} />
+      <AutoParcelCard value={data.workspace.automations?.parcel_status?.mode ?? "off"} owner={owner} onChange={(mode) => void act(() => api("POST", `${base}/automations`, { topic: "parcel_status", mode }), () => "Gespeichert.")} />
 
       <DesignCard base={base} owner={owner} />
 
@@ -777,6 +778,28 @@ function SnippetsCard({ base, canEdit }: { base: string; canEdit: boolean }) {
       )}
       {message && <p className={message.ok ? "small notice ok" : "small error"}>{message.text}</p>}
       <p className="muted small">Gilt für alle im Team. Inhaber und Bearbeiter dürfen Textbausteine ändern.</p>
+    </section>
+  );
+}
+
+const AUTO_PARCEL: Record<"off" | "draft" | "send", string> = {
+  off: "Aus: Antwort erst nach Entscheidung einer Person",
+  draft: "Automatisch vorbereiten: Antwort mit Trackinglink, Senden per Klick",
+  send: "Automatisch senden, wenn nichts dagegen spricht",
+};
+
+/** "Wo ist mein Paket?": fixed template with the tracking link from weclapp, no AI. */
+function AutoParcelCard({ value, owner, onChange }: { value: "off" | "draft" | "send"; owner: boolean; onChange: (v: "off" | "draft" | "send") => void }) {
+  return (
+    <section className="card">
+      <h3>Paketstatus-Anfragen</h3>
+      <p className="muted small">Fragt ein Kunde, wo sein Paket ist, antwortet SupportX aus einer festen Vorlage mit Lieferstand und Trackinglink aus weclapp, ohne KI-Kosten. Das Anliegen erkennt SupportX beim Eingang; im Fall lässt es sich ändern.</p>
+      <label>Bei neuen Anfragen
+        <select value={value} disabled={!owner} onChange={(e) => onChange(e.target.value as "off" | "draft" | "send")}>
+          {Object.entries(AUTO_PARCEL).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </select>
+      </label>
+      <p className="muted small">Automatisch gesendet wird nur, wenn die Bestellung eindeutig ist, jede Lieferung einen Trackinglink hat, die Nachricht kein heikles Thema enthält (z. B. „nie angekommen“, Erstattung, Gesundheit), die Entwurfsprüfung keinen Hinweis hat und der Versand für den Kanal freigeschaltet ist. Sonst liegt die Antwort fertig im Fall und der Grund steht dabei. Gilt für Nachrichten ab jetzt.</p>
     </section>
   );
 }
