@@ -10,6 +10,7 @@ import { invoiceSummary } from "./invoices.ts";
 import { OWN_COPY_REASON, ownCopyText } from "../core/category.ts";
 import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
+import { MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
 
@@ -22,8 +23,36 @@ function assertId(id: string): void {
 const NEEDS_ATTENTION =
   "c.category = 'support' AND c.status <> 'closed' AND (c.order_match_status NOT IN ('unique','pending') OR c.last_error IS NOT NULL OR EXISTS (SELECT 1 FROM outbox o WHERE o.workspace_id = c.workspace_id AND o.conversation_id = c.id AND o.state IN ('delivery_uncertain','failed')))";
 
-export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter) {
-  const where = {
+/**
+ * Since when the customer waits for an answer: the first customer message after our
+ * last reply (sent from SupportX, from the mailbox or seen as Amazon's copy). Only
+ * open customer cases have a deadline; "Wartet" and "Erledigt" stop the clock.
+ */
+const WAITING_SINCE = `CASE WHEN c.status = 'open' AND c.category = 'support' THEN (
+    SELECT min(m.received_at) FROM messages m
+     WHERE m.workspace_id = c.workspace_id AND m.conversation_id = c.id AND m.direction = 'inbound' AND m.kind = 'customer'
+       AND m.received_at > greatest(
+         (SELECT max(o.received_at) FROM messages o WHERE o.workspace_id = c.workspace_id AND o.conversation_id = c.id AND o.direction = 'outbound'),
+         -- Answered in Seller Central: Amazon's copy of our message lands as its own (info) case.
+         (SELECT max(om.received_at) FROM conversations oc JOIN messages om ON om.workspace_id = oc.workspace_id AND om.conversation_id = oc.id
+           WHERE oc.workspace_id = c.workspace_id AND oc.category_reason = '${OWN_COPY_REASON.replace(/'/g, "''")}'
+             AND ((c.customer_address IS NOT NULL AND oc.customer_address = c.customer_address)
+               OR EXISTS (SELECT 1 FROM jsonb_array_elements(oc.order_references) x, jsonb_array_elements(c.order_references) y WHERE x->>'value' = y->>'value'))),
+         '-infinity'::timestamptz)
+  ) END`;
+const REPLY_HOURS = "nullif((w.reply_deadlines->>c.source_platform)::int, 0)";
+/** Others who had the case open in the last 45 seconds (heartbeat every 15). */
+const PRESENCE_WINDOW = "interval '45 seconds'";
+
+function likePattern(q: string): string {
+  return `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+}
+
+export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter, query?: string) {
+  const q = query?.trim().slice(0, 100) ?? "";
+  if (q.length === 1) throw new ServiceError(400, "INVALID", "Bitte mindestens zwei Zeichen eingeben.");
+  // A search looks through every case, whatever tab is open.
+  const where = q ? "true" : {
     open: "c.status = 'open' AND c.category = 'support'",
     needs_attention: NEEDS_ATTENTION,
     waiting: "c.status = 'waiting' AND c.category = 'support'",
@@ -31,21 +60,38 @@ export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilte
     info: "c.category = 'info'",
     all: "true",
   }[filter];
+  // Open cases: the deadline that runs out first on top. "Wartet": the next follow-up first.
+  const order = q ? "last_message_at DESC NULLS LAST"
+    : filter === "open" || filter === "needs_attention" ? "due_at ASC NULLS LAST, last_message_at DESC NULLS LAST"
+    : filter === "waiting" ? "snooze_until ASC NULLS LAST, last_message_at DESC NULLS LAST"
+    : "last_message_at DESC NULLS LAST";
+  const search = `($3::text IS NULL OR c.subject ILIKE $3 OR c.customer_address ILIKE $3 OR c.customer_name ILIKE $3
+      OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.order_references) r WHERE r->>'value' ILIKE $3)
+      OR EXISTS (SELECT 1 FROM order_links ol WHERE ol.workspace_id = c.workspace_id AND ol.conversation_id = c.id AND ol.is_current AND ol.snapshot::text ILIKE $3)
+      OR EXISTS (SELECT 1 FROM messages m WHERE m.workspace_id = c.workspace_id AND m.conversation_id = c.id AND (m.body_text ILIKE $3 OR m.from_name ILIKE $3 OR m.from_address ILIKE $3)))`;
   return many(
     ctx.db,
-    `SELECT c.id, c.subject, c.status, c.category, c.category_reason, c.source_platform, c.customer_address, c.customer_name, c.order_match_status, c.last_message_at, c.last_error,
-            ma.name AS merchant_account_name, cc.display_name AS connection_name, cc.kind AS connection_kind, u.display_name AS assignee_name,
-            (SELECT d.status FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS draft_status,
-            (SELECT d.intent FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS intent,
-            (SELECT o.state FROM outbox o WHERE o.conversation_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS outbox_state,
-            (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
-     FROM conversations c
-     JOIN channel_connections cc ON cc.id = c.connection_id
-     LEFT JOIN merchant_accounts ma ON ma.id = c.merchant_account_id
-     LEFT JOIN users u ON u.id = c.assignee_user_id
-     WHERE c.workspace_id = $1 AND ${where}
-     ORDER BY c.last_message_at DESC NULLS LAST LIMIT 200`,
-    [actor.workspaceId],
+    `SELECT * FROM (
+       SELECT c.id, c.subject, c.status, c.category, c.category_reason, c.source_platform, c.customer_address, c.customer_name, c.order_match_status, c.last_message_at, c.last_error, c.snooze_until,
+              ma.name AS merchant_account_name, cc.display_name AS connection_name, cc.kind AS connection_kind, u.display_name AS assignee_name,
+              (SELECT d.status FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS draft_status,
+              (SELECT d.intent FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS intent,
+              (SELECT o.state FROM outbox o WHERE o.conversation_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS outbox_state,
+              (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+              (SELECT string_agg(pu.display_name, ', ' ORDER BY pu.display_name) FROM case_presence p JOIN users pu ON pu.id = p.user_id
+                WHERE p.workspace_id = c.workspace_id AND p.conversation_id = c.id AND p.user_id IS DISTINCT FROM $2::uuid AND p.seen_at > now() - ${PRESENCE_WINDOW}) AS open_by,
+              ws.waiting_since, ${REPLY_HOURS} AS reply_hours,
+              ws.waiting_since + ${REPLY_HOURS} * interval '1 hour' AS due_at
+       FROM conversations c
+       JOIN workspaces w ON w.id = c.workspace_id
+       JOIN channel_connections cc ON cc.id = c.connection_id
+       LEFT JOIN merchant_accounts ma ON ma.id = c.merchant_account_id
+       LEFT JOIN users u ON u.id = c.assignee_user_id
+       CROSS JOIN LATERAL (SELECT ${WAITING_SINCE} AS waiting_since) ws
+       WHERE c.workspace_id = $1 AND ${where} AND ${search}
+     ) x
+     ORDER BY ${order} LIMIT 200`,
+    [actor.workspaceId, actor.type === "user" ? actor.userId : null, q ? likePattern(q) : null],
   );
 }
 
@@ -54,8 +100,9 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const ws = actor.workspaceId;
   const conversation = await one(
     ctx.db,
-    `SELECT c.*, ma.name AS merchant_account_name, cc.display_name AS connection_name, cc.kind AS connection_kind, u.display_name AS assignee_name
-     FROM conversations c JOIN channel_connections cc ON cc.id = c.connection_id
+    `SELECT c.*, ma.name AS merchant_account_name, cc.display_name AS connection_name, cc.kind AS connection_kind, u.display_name AS assignee_name,
+            ${WAITING_SINCE} AS waiting_since, ${REPLY_HOURS} AS reply_hours
+     FROM conversations c JOIN workspaces w ON w.id = c.workspace_id JOIN channel_connections cc ON cc.id = c.connection_id
      LEFT JOIN merchant_accounts ma ON ma.id = c.merchant_account_id LEFT JOIN users u ON u.id = c.assignee_user_id
      WHERE c.workspace_id = $1 AND c.id = $2`,
     [ws, conversationId],
@@ -190,15 +237,72 @@ export async function addNote(ctx: AppContext, actor: Actor, conversationId: str
   });
 }
 
-export async function setStatus(ctx: AppContext, actor: Actor, conversationId: string, status: string): Promise<void> {
+/**
+ * Open / Wartet / Erledigt. "Wartet" can carry a follow-up date: the worker reopens
+ * the case then. Any status set by a person clears an earlier follow-up.
+ */
+export async function setStatus(ctx: AppContext, actor: Actor, conversationId: string, status: string, snoozeUntil?: string | null): Promise<void> {
   requireRole(actor, ["owner", "agent"]);
   if (!["open", "waiting", "closed"].includes(status)) throw new ServiceError(400, "INVALID", "Ungültiger Status.");
   assertId(conversationId);
+  let until: Date | null = null;
+  if (snoozeUntil) {
+    if (status !== "waiting") throw new ServiceError(400, "INVALID", "Eine Wiedervorlage gibt es nur bei „Wartet“.");
+    until = new Date(snoozeUntil);
+    const now = Date.now();
+    if (Number.isNaN(until.getTime()) || until.getTime() <= now || until.getTime() > now + 366 * 86_400_000) {
+      throw new ServiceError(400, "INVALID", "Die Wiedervorlage muss in der Zukunft liegen, höchstens ein Jahr.");
+    }
+  }
   await withTx(ctx.db, async (tx) => {
-    const res = await tx.query("UPDATE conversations SET status = $3, updated_at = now() WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conversationId, status]);
+    const res = await tx.query("UPDATE conversations SET status = $3, snooze_until = $4, updated_at = now() WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conversationId, status, until]);
     if (res.rowCount === 0) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
-    await audit(tx, actor, "conversation.status", "conversation", conversationId, { status });
+    await audit(tx, actor, "conversation.status", "conversation", conversationId, until ? { status, snoozeUntil: until.toISOString() } : { status });
   });
+}
+
+/** Worker: cases whose follow-up date has come are open again. */
+export async function reopenDueFollowUps(ctx: AppContext): Promise<number> {
+  return withTx(ctx.db, async (tx) => {
+    const rows = await many<{ id: string; workspace_id: string }>(
+      tx,
+      "UPDATE conversations SET status = 'open', updated_at = now() WHERE status = 'waiting' AND snooze_until IS NOT NULL AND snooze_until <= now() RETURNING id, workspace_id",
+    );
+    for (const r of rows) await audit(tx, { type: "system", workspaceId: r.workspace_id }, "conversation.follow_up_due", "conversation", r.id);
+    return rows.length;
+  });
+}
+
+/**
+ * Heartbeat while a person has a case open (and whether they are writing the answer).
+ * Returns the others who have it open, so nobody answers the same customer twice.
+ */
+export async function touchPresence(ctx: AppContext, actor: Actor, conversationId: string, editing: boolean): Promise<Array<{ name: string; editing: boolean }>> {
+  assertId(conversationId);
+  if (actor.type !== "user") return [];
+  return withTx(ctx.db, async (tx) => {
+    const conv = await one(tx, "SELECT 1 FROM conversations WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conversationId]);
+    if (!conv) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+    await tx.query(
+      `INSERT INTO case_presence (workspace_id, conversation_id, user_id, editing, seen_at) VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (workspace_id, conversation_id, user_id) DO UPDATE SET editing = EXCLUDED.editing, seen_at = now()`,
+      [actor.workspaceId, conversationId, actor.userId, editing],
+    );
+    await tx.query("DELETE FROM case_presence WHERE workspace_id = $1 AND seen_at < now() - interval '1 hour'", [actor.workspaceId]);
+    return many<{ name: string; editing: boolean }>(
+      tx,
+      `SELECT u.display_name AS name, p.editing FROM case_presence p JOIN users u ON u.id = p.user_id
+        WHERE p.workspace_id = $1 AND p.conversation_id = $2 AND p.user_id <> $3 AND p.seen_at > now() - ${PRESENCE_WINDOW} ORDER BY u.display_name`,
+      [actor.workspaceId, conversationId, actor.userId],
+    );
+  });
+}
+
+/** The person closed the case view. */
+export async function leavePresence(ctx: AppContext, actor: Actor, conversationId: string): Promise<void> {
+  assertId(conversationId);
+  if (actor.type !== "user") return;
+  await ctx.db.query("DELETE FROM case_presence WHERE workspace_id = $1 AND conversation_id = $2 AND user_id = $3", [actor.workspaceId, conversationId, actor.userId]);
 }
 
 export const OUTCOMES = ["none", "replacement", "refund", "partial_refund", "return", "question", "other"] as const;
@@ -270,7 +374,7 @@ export async function assign(ctx: AppContext, actor: Actor, conversationId: stri
 export async function getSettings(ctx: AppContext, actor: Actor) {
   const ws = actor.workspaceId;
   const [workspace, accounts, connections, rules, routes, erp, categoryRules, jobs] = await Promise.all([
-    one(ctx.db, "SELECT id, name, reply_signature, reply_tone, default_language, allowed_link_prefixes, ai_enabled, auto_invoice, ai_secret_id IS NOT NULL AS has_ai_key, ai_key_hint, setup_confirmations FROM workspaces WHERE id = $1", [ws]),
+    one(ctx.db, "SELECT id, name, reply_signature, reply_tone, default_language, allowed_link_prefixes, ai_enabled, auto_invoice, ai_secret_id IS NOT NULL AS has_ai_key, ai_key_hint, setup_confirmations, reply_deadlines FROM workspaces WHERE id = $1", [ws]),
     many(ctx.db, "SELECT id, name, platform, order_scope_field, order_scope_value, paused FROM merchant_accounts WHERE workspace_id = $1 ORDER BY name", [ws]),
     many(ctx.db, "SELECT id, kind, display_name, config - 'clientState' - 'secretHint' - 'oauthStateHash' - 'oauthStateExpiresAt' - 'oauthStateUserId' AS config, secret_id IS NOT NULL AS has_secret, default_merchant_account_id, default_source_platform, send_enabled, paused, health, last_sync_at, last_error FROM channel_connections WHERE workspace_id = $1 ORDER BY display_name", [ws]),
     many(ctx.db, "SELECT r.id, r.connection_id, r.priority, r.match_type, r.pattern, r.source_platform, r.merchant_account_id, ma.name AS merchant_account_name FROM routing_rules r LEFT JOIN merchant_accounts ma ON ma.id = r.merchant_account_id WHERE r.workspace_id = $1 ORDER BY r.priority, r.pattern", [ws]),
@@ -346,17 +450,20 @@ export async function setSetupConfirmation(ctx: AppContext, actor: Actor, input:
   });
 }
 
-export async function updateWorkspaceSettings(ctx: AppContext, actor: Actor, input: { replySignature?: string; replyTone?: string; allowedLinkPrefixes?: string[]; aiEnabled?: boolean; autoInvoice?: "off" | "draft" | "send" }): Promise<void> {
+export async function updateWorkspaceSettings(ctx: AppContext, actor: Actor, input: { replySignature?: string; replyTone?: string; allowedLinkPrefixes?: string[]; aiEnabled?: boolean; autoInvoice?: "off" | "draft" | "send"; replyDeadlines?: unknown }): Promise<void> {
   requireRole(actor, ["owner"]);
+  const deadlines = input.replyDeadlines === undefined ? null : normalizeDeadlines(input.replyDeadlines);
+  if (input.replyDeadlines !== undefined && !deadlines) throw new ServiceError(400, "INVALID", `Antwortfristen sind ganze Stunden von 0 bis ${MAX_DEADLINE_HOURS} (0 = keine Frist).`);
   const prefixes = input.allowedLinkPrefixes?.map((p) => p.trim()).filter(Boolean);
   if (prefixes?.some((p) => !/^https:\/\/[^\s/]+\.[^\s/]+\//.test(p))) throw new ServiceError(400, "INVALID", "Freigegebene Links müssen mit https://domain.tld/ beginnen.");
   await withTx(ctx.db, async (tx) => {
     await tx.query(
       `UPDATE workspaces SET reply_signature = coalesce($2, reply_signature), reply_tone = coalesce($3, reply_tone),
          allowed_link_prefixes = coalesce($4, allowed_link_prefixes), ai_enabled = coalesce($5, ai_enabled), auto_invoice = coalesce($6, auto_invoice),
-         auto_invoice_since = CASE WHEN $6::text IS NULL OR $6::text = auto_invoice THEN auto_invoice_since WHEN $6::text = 'off' THEN NULL ELSE now() END WHERE id = $1`,
-      [actor.workspaceId, input.replySignature ?? null, input.replyTone ?? null, prefixes ?? null, input.aiEnabled ?? null, input.autoInvoice ?? null],
+         auto_invoice_since = CASE WHEN $6::text IS NULL OR $6::text = auto_invoice THEN auto_invoice_since WHEN $6::text = 'off' THEN NULL ELSE now() END,
+         reply_deadlines = reply_deadlines || coalesce($7::jsonb, '{}'::jsonb) WHERE id = $1`,
+      [actor.workspaceId, input.replySignature ?? null, input.replyTone ?? null, prefixes ?? null, input.aiEnabled ?? null, input.autoInvoice ?? null, deadlines ? JSON.stringify(deadlines) : null],
     );
-    await audit(tx, actor, "workspace.settings", "workspace", actor.workspaceId, { aiEnabled: input.aiEnabled, autoInvoice: input.autoInvoice });
+    await audit(tx, actor, "workspace.settings", "workspace", actor.workspaceId, { aiEnabled: input.aiEnabled, autoInvoice: input.autoInvoice, replyDeadlines: deadlines ?? undefined });
   });
 }

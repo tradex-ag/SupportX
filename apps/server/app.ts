@@ -9,7 +9,8 @@ import { z } from "zod";
 import { one } from "../../packages/storage/db.ts";
 import { DEFAULT_THEME, parseTheme, publicTheme, themeCss, type Theme } from "../../packages/core/theme.ts";
 import { actorFor, changePassword, login, logout, userForSession, workspacesFor } from "../../packages/services/auth.ts";
-import { addNote, assign, caseCounts, checkWorkspaceAiKey, deleteCategoryRule, exportCasesCsv, getCase, getSettings, listCases, setCaseCategory, setOutcome, setStatus, setSetupConfirmation, setWorkspaceAiKey, updateWorkspaceSettings, type CaseFilter } from "../../packages/services/cases.ts";
+import { deleteSnippet, listSnippets, saveSnippet } from "../../packages/services/snippets.ts";
+import { addNote, assign, caseCounts, checkWorkspaceAiKey, deleteCategoryRule, exportCasesCsv, getCase, getSettings, leavePresence, listCases, setCaseCategory, touchPresence, setOutcome, setStatus, setSetupConfirmation, setWorkspaceAiKey, updateWorkspaceSettings, type CaseFilter } from "../../packages/services/cases.ts";
 import {
   addRoutingRule,
   checkChannel,
@@ -40,7 +41,7 @@ import { getMessageAttachment, listMessageAttachments } from "../../packages/ser
 import { attachUploadedFile, deleteDocument, getDocument, listDocuments, setDraftDocuments, uploadDocument } from "../../packages/services/documents.ts";
 import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
 import { previewDesign, resetDesign, saveDesign, workspaceTheme } from "../../packages/services/design.ts";
-import { approveDraft, composeDraft, discardDraft, editDraft, polishDraft, queueReply, requestRedraft, resolveUncertainSend } from "../../packages/services/replies.ts";
+import { approveDraft, composeDraft, discardDraft, editDraft, polishDraft, queueReply, renderSnippet, requestRedraft, resolveUncertainSend, snippetDraft } from "../../packages/services/replies.ts";
 
 const SESSION_COOKIE = "supportx_session";
 const webDist = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
@@ -142,8 +143,9 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   // --- Cases -----------------------------------------------------------------
   app.get("/api/w/:ws/cases", async (req) => {
     const filter = parse(z.enum(["open", "needs_attention", "waiting", "closed", "info", "all"]).default("open"), (req.query as { filter?: string }).filter) as CaseFilter;
+    const q = parse(z.string().max(100).optional(), (req.query as { q?: string }).q);
     const a = await actor(req);
-    return { cases: await listCases(ctx, a, filter), counts: await caseCounts(ctx, a) };
+    return { cases: await listCases(ctx, a, filter, q), counts: await caseCounts(ctx, a) };
   });
   app.post("/api/w/:ws/cases/:id/category", async (req) => {
     const body = parse(z.object({ category: z.enum(["support", "info"]), remember: z.enum(["none", "address", "domain"]).optional() }), req.body);
@@ -173,8 +175,34 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     return { ok: true };
   });
   app.post("/api/w/:ws/cases/:id/status", async (req) => {
-    await setStatus(ctx, await actor(req), (req.params as { id: string }).id, parse(z.object({ status: z.string() }), req.body).status);
+    const body = parse(z.object({ status: z.string(), snoozeUntil: z.string().max(40).nullable().optional() }), req.body);
+    await setStatus(ctx, await actor(req), (req.params as { id: string }).id, body.status, body.snoozeUntil);
     return { ok: true };
+  });
+  app.post("/api/w/:ws/cases/:id/presence", async (req) => {
+    const body = parse(z.object({ editing: z.boolean().default(false) }), req.body ?? {});
+    return { others: await touchPresence(ctx, await actor(req), (req.params as { id: string }).id, body.editing) };
+  });
+  app.delete("/api/w/:ws/cases/:id/presence", async (req) => {
+    await leavePresence(ctx, await actor(req), (req.params as { id: string }).id);
+    return { ok: true };
+  });
+  app.get("/api/w/:ws/snippets", async (req) => ({ snippets: await listSnippets(ctx, await actor(req)) }));
+  app.post("/api/w/:ws/snippets", async (req) => {
+    const body = parse(z.object({ id: z.string().optional(), title: z.string().max(200), body: z.string().max(12_000) }), req.body);
+    return { snippet: await saveSnippet(ctx, await actor(req), body) };
+  });
+  app.delete("/api/w/:ws/snippets/:id", async (req) => {
+    await deleteSnippet(ctx, await actor(req), (req.params as { id: string }).id);
+    return { ok: true };
+  });
+  app.get("/api/w/:ws/cases/:id/snippets/:snippetId", async (req) => {
+    const p = req.params as { id: string; snippetId: string };
+    return renderSnippet(ctx, await actor(req), p.id, p.snippetId);
+  });
+  app.post("/api/w/:ws/cases/:id/snippet-reply", async (req) => {
+    const body = parse(z.object({ snippetId: z.string() }), req.body);
+    return snippetDraft(ctx, await actor(req), (req.params as { id: string }).id, body.snippetId);
   });
   app.post("/api/w/:ws/cases/:id/outcome", async (req) => {
     const body = parse(z.object({ outcome: z.string().nullable(), note: z.string().max(2000).optional() }), req.body);
@@ -270,7 +298,7 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   // --- Settings (owner) -------------------------------------------------------
   app.get("/api/w/:ws/settings", async (req) => getSettings(ctx, await actor(req)));
   app.put("/api/w/:ws/settings", async (req) => {
-    const body = parse(z.object({ replySignature: z.string().max(1000).optional(), replyTone: z.string().max(200).optional(), allowedLinkPrefixes: z.array(z.string().max(300)).max(20).optional(), aiEnabled: z.boolean().optional(), autoInvoice: z.enum(["off", "draft", "send"]).optional() }), req.body);
+    const body = parse(z.object({ replySignature: z.string().max(1000).optional(), replyTone: z.string().max(200).optional(), allowedLinkPrefixes: z.array(z.string().max(300)).max(20).optional(), aiEnabled: z.boolean().optional(), autoInvoice: z.enum(["off", "draft", "send"]).optional(), replyDeadlines: z.record(z.string(), z.union([z.number(), z.string()])).optional() }), req.body);
     await updateWorkspaceSettings(ctx, await actor(req), body);
     return { ok: true };
   });

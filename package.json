@@ -1,6 +1,6 @@
 {
   "name": "supportx",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Self-hosted support inbox for marketplace sellers: Microsoft mail, weclapp order context, replaceable AI drafts and human review",
   "private": true,
   "type": "module",

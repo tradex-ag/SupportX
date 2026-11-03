@@ -1,5 +1,6 @@
 import type { AllowedFact, OrderRecord } from "./contracts.ts";
 import { hasDeliveredEvidence, hasDispatchEvidence } from "./facts.ts";
+import { openPlaceholders } from "./snippets.ts";
 
 export interface DraftIssue {
   /** `block` prevents approval until the text is changed; `warn` must be acknowledged by the reviewer. */
@@ -15,6 +16,11 @@ export interface DraftIssue {
     | "HEALTH_REVIEW"
     | "RECIPIENT_IN_TEXT"
     | "FILES_NOT_SUPPORTED"
+    | "PLACEHOLDER_OPEN"
+    | "MARKETPLACE_CONTACT"
+    | "MARKETPLACE_LINK"
+    | "MARKETPLACE_REVIEW"
+    | "MARKETPLACE_MARKETING"
     | "EMPTY";
   message: string;
 }
@@ -27,7 +33,17 @@ export interface DraftCheckInput {
   orderStatus: "unique" | "ambiguous" | "missing" | "error" | "not_checked";
   /** Operator-approved link prefixes (shop FAQ, return portal, signature). */
   allowedLinkPrefixes: ReadonlyArray<string>;
+  /** Where the reply goes (amazon, ebay, …); marketplaces get their messaging rules checked. */
+  sourcePlatform?: string;
 }
+
+/** Platforms whose buyer messaging forbids contact details and advertising. */
+const MARKETPLACES: Readonly<Record<string, string>> = { amazon: "Amazon", ebay: "eBay", kaufland: "Kaufland", shop_apotheke: "Shop Apotheke", docmorris: "DocMorris" };
+const EMAIL_IN_TEXT = /[\w.+-]+@[\w-]+(\.[\w-]+)*\.[a-z]{2,}/i;
+// Only numbers that are clearly phone numbers: labelled, or in international form. Order and parcel numbers stay out.
+const PHONE_IN_TEXT = /\b(?:tel|telefon(?:nummer)?|phone|fon|mobil|handy|whatsapp|hotline)\.?\s*:?\s*[+(\d]|\+\d{2}[\s\d/()-]{6,}\d/i;
+const REVIEW_REQUEST = /\b(positive[nrs]? (bewertung|rezension|feedback)|(5|fünf) sterne|bewertung (abgeben|hinterlassen|schreiben)|rezension (abgeben|hinterlassen|schreiben)|(bewerten|rezensieren) sie (uns|den artikel|das produkt)|leave (us )?(a )?(positive )?(review|feedback)|5[- ]star)/i;
+const MARKETING = /\b(gutschein-?codes?|rabatt-?codes?|newsletter|besuchen sie (doch )?(auch )?unseren (online-?)?shop|in unserem (eigenen |online-?)?shop|auf unserer (web)?seite (bestellen|kaufen)|discount code|visit our (web)?(shop|store|site))\b/i;
 
 const URL = /https?:\/\/[^\s<>()"']+/gi;
 const NEGATION = /(nicht|noch nicht|kein|keine|not|bisher nicht|leider nicht)\s+(\S+\s+){0,2}$/i;
@@ -97,6 +113,40 @@ export function checkDraft(input: DraftCheckInput): DraftIssue[] {
   }
   if (input.orderStatus !== "unique" && input.citedFactIds.some((id) => id.startsWith("order") || id.startsWith("shipment"))) {
     issues.push({ severity: "block", code: "ORDER_NOT_CONFIRMED", message: "Der Text nutzt Bestelldaten, obwohl die Zuordnung nicht eindeutig ist." });
+  }
+  const open = openPlaceholders(text);
+  if (open.length > 0) {
+    issues.push({ severity: "block", code: "PLACEHOLDER_OPEN", message: `Im Text steht noch ein Platzhalter ohne Wert: ${open.join(", ")}. Bitte ausfüllen oder entfernen.` });
+  }
+  issues.push(...marketplaceIssues(text, input));
+  return issues;
+}
+
+/**
+ * Messaging rules of the marketplaces: no own e-mail addresses or phone numbers, no
+ * advertising, on Amazon no links that the order does not need and no review requests.
+ * Warnings, because a person may know better (e.g. a recall hotline), but they must
+ * be confirmed before approval.
+ */
+function marketplaceIssues(text: string, input: DraftCheckInput): DraftIssue[] {
+  const name = input.sourcePlatform ? MARKETPLACES[input.sourcePlatform] : undefined;
+  if (!name) return [];
+  const issues: DraftIssue[] = [];
+  if (EMAIL_IN_TEXT.test(text) || PHONE_IN_TEXT.test(text)) {
+    issues.push({ severity: "warn", code: "MARKETPLACE_CONTACT", message: `${name} erlaubt in Käufernachrichten keine eigenen E-Mail-Adressen oder Telefonnummern (auch nicht in der Signatur). Bitte entfernen, sonst droht eine Sperre der Nachrichtenfunktion.` });
+  }
+  if (MARKETING.test(text)) {
+    issues.push({ severity: "warn", code: "MARKETPLACE_MARKETING", message: `${name} verbietet Werbung und Verweise auf den eigenen Shop in Käufernachrichten (Gutscheine, Newsletter, „bestellen Sie bei uns“).` });
+  }
+  if (input.sourcePlatform === "amazon") {
+    const factText = input.facts.map((f) => f.text).join("\n");
+    const extra = [...text.matchAll(URL)].map((m) => m[0].replace(/[.,;:!?]+$/, "")).filter((url) => !factText.includes(url));
+    if (extra.length > 0) {
+      issues.push({ severity: "warn", code: "MARKETPLACE_LINK", message: `Amazon erlaubt Links nur, wenn sie für die Bestellung nötig sind (z. B. Sendungsverfolgung). Bitte prüfen: ${extra.join(", ")}` });
+    }
+    if (REVIEW_REQUEST.test(text)) {
+      issues.push({ severity: "warn", code: "MARKETPLACE_REVIEW", message: "Amazon verbietet, in Nachrichten um (positive) Bewertungen zu bitten oder dafür etwas anzubieten. Dafür gibt es in Seller Central „Bewertung anfordern“." });
+    }
   }
   return issues;
 }

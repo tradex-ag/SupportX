@@ -20,6 +20,8 @@ A self-hosted support inbox for marketplace sellers: Microsoft 365 mail in, orde
 
 - **Invoices and files (0.5.0):** "Rechnung senden" fetches the invoice PDF of the linked order from weclapp (read-only, `downloadLatestSalesInvoicePdf`) and attaches it to a template reply (no AI cost); "Datei anhängen" adds a PDF/JPG/PNG to one reply. Optional per workspace: recognise invoice requests on arrival and prepare or send the invoice reply on its own (narrow rule `invoice-v1`; never when the order is unclear, the channel takes no files, the customer names an own address, or any check warns). Tested against local test doubles only.
 
+- **Everyday basics (0.6.0):** reply deadline per platform (Amazon 24 h by default, editable, 0 = none) as a traffic light in the list, open cases sorted by the deadline that runs out first; the clock starts at the first unanswered customer message and also stops for Amazon's copy of a reply sent in Seller Central. Search over all cases (order and parcel numbers, name, address, text). Text blocks with placeholders filled from the case and weclapp (`{Name}`, `{Bestellnummer}`, `{Sendungsnummer}`, `{Trackinglink}` …), as a reply or inserted into a draft, no AI cost; an unfilled placeholder blocks approval. Marketplace messaging rules in the draft check (warnings: e-mail addresses or phone numbers, advertising, on Amazon also review requests and links the order does not need). "Who has the case open / is writing" for two or more people. "Wartet" with a follow-up date that reopens the case.
+
 Not yet: MCP server, refund/replacement/return workflows, free-form automatic replies.
 
 ## Quick start (demo, no credentials)

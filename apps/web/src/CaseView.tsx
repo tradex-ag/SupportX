@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { orderLinks, type OrderLink } from "./order-links.ts";
 import { api, fmtDate, MATCH_LABEL, OUTBOX_LABEL, PLATFORM_LABEL } from "./api.ts";
 import { INTENT_LABEL } from "./Inbox.tsx";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
 import { trackingHref } from "../../../packages/core/tracking.ts";
+import { deadlineState } from "../../../packages/core/deadline.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -29,7 +30,7 @@ interface OrderSnapshot {
 }
 interface CaseData {
   linkTargets?: { erp_base_url: string | null; mirakl_base_url: string | null } | null;
-  conversation: Rec & { outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
+  conversation: Rec & { waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
   messages: Array<{ id: string; direction: string; kind: string; from_address: string; from_name: string | null; reply_to: Array<{ address: string; name?: string }> | null; subject: string; body_text: string; received_at: string; has_attachments: boolean; removed_remotely_at: string | null }>;
   /** Messages of other cases of the same customer or order, for context. */
   relatedMessages?: Array<CaseData["messages"][number] & { conversation_id: string; conversation_subject: string }>;
@@ -69,9 +70,22 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
   const base = `/api/w/${workspaceId}`;
   const canEdit = role !== "viewer";
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+  const [snippets, setSnippets] = useState<SnippetInfo[]>([]);
   useEffect(() => {
     api<{ documents: DocumentInfo[] }>("GET", `${base}/documents`).then((r) => setDocuments(r.documents), () => setDocuments([]));
+    api<{ snippets: SnippetInfo[] }>("GET", `${base}/snippets`).then((r) => setSnippets(r.snippets), () => setSnippets([]));
   }, [base]);
+
+  // Who else has this case open: a heartbeat every 15 seconds, at once when writing starts or stops.
+  const [editing, setEditing] = useState(false);
+  const [others, setOthers] = useState<Array<{ name: string; editing: boolean }>>([]);
+  useEffect(() => {
+    const beat = () => api<{ others: Array<{ name: string; editing: boolean }> }>("POST", `${base}/cases/${caseId}/presence`, { editing }).then((r) => setOthers(r.others), () => undefined);
+    void beat();
+    const timer = setInterval(beat, 15_000);
+    return () => clearInterval(timer);
+  }, [base, caseId, editing]);
+  useEffect(() => () => { void api("DELETE", `${base}/cases/${caseId}/presence`).catch(() => undefined); }, [base, caseId]);
 
   const load = useCallback(async () => {
     try {
@@ -86,12 +100,12 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
     return () => clearInterval(timer);
   }, [load]);
 
-  const act = async (fn: () => Promise<unknown>, success?: string) => {
+  const act = async (fn: () => Promise<unknown>, success?: string | ((result: unknown) => string)) => {
     setError(null);
     setNotice(null);
     try {
-      await fn();
-      if (success) setNotice(success);
+      const result = await fn();
+      if (success) setNotice(typeof success === "function" ? success(result) : success);
       await load();
       onChanged();
     } catch (err) {
@@ -106,6 +120,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
   const draft = data.drafts.find((d) => d.status === "proposed" || d.status === "edited") ?? null;
   const approval = draft ? data.approvals.find((a) => a.draft_id === draft.id && a.draft_version === draft.version && !a.invalidated_at && new Date(a.expires_at) > new Date()) : undefined;
 
+  const due = deadlineState(c.waiting_since, c.reply_hours);
   const sender = data.messages.find((m) => m.direction === "inbound")?.from_address ?? c.customer_address ?? "";
   const setCategory = (category: "support" | "info", remember: "none" | "address" | "domain") =>
     act(() => api("POST", `${base}/cases/${caseId}/category`, { category, remember }), category === "info" ? "Als Werbung/Info eingeordnet." : "Als Kundenanfrage eingeordnet. Die Bestellung wird gesucht.");
@@ -145,6 +160,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
           <div className="meta small muted">
             <span className="pill platform">{PLATFORM_LABEL[c.source_platform] ?? c.source_platform}</span>
             <span>{c.connection_name}</span>
+            {due && <span className={`deadline ${due.tone}`} title={`${c.reply_hours} Std. ab der ersten unbeantworteten Kundennachricht`}><i aria-hidden="true" />Antwort fällig {fmtDate(due.dueAt.toISOString())}, {due.label}</span>}
           </div>
         </div>
         {canEdit && (
@@ -158,6 +174,9 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
                   </button>
                 ))}
               </div>
+              {c.status === "waiting" && (
+                <FollowUp key={c.snooze_until ?? "none"} value={c.snooze_until} onSet={(iso) => act(() => api("POST", `${base}/cases/${caseId}/status`, { status: "waiting", snoozeUntil: iso }), iso ? "Wiedervorlage gespeichert. Der Fall kommt an dem Tag wieder unter „Anfragen“." : "Wiedervorlage entfernt.")} />
+              )}
             </div>
             <label className="field"><span>Zuständig</span>
               <select value={c.assignee_user_id ?? ""} onChange={(e) => act(() => api("POST", `${base}/cases/${caseId}/assign`, { userId: e.target.value || null }))}>
@@ -169,6 +188,13 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
           </div>
         )}
       </div>
+      {others.length > 0 && (
+        <p className="notice presence">
+          {others.some((o) => o.editing)
+            ? `${others.filter((o) => o.editing).map((o) => o.name).join(", ")} schreibt gerade an einer Antwort. Bitte absprechen, bevor du auch antwortest.`
+            : `${others.map((o) => o.name).join(", ")} hat diesen Fall gerade offen.`}
+        </p>
+      )}
       {error && <p className="notice bad">{error}</p>}
       {notice && <p className="notice ok">{notice}</p>}
       {c.last_error && <p className="notice bad">Letzter Fehler: {c.last_error}</p>}
@@ -193,6 +219,11 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
                 invoices={data.invoices ?? []}
                 orderUnique={c.order_match_status === "unique"}
                 onInvoice={() => act(() => api("POST", `${base}/cases/${caseId}/invoice-reply`), data.replyFiles?.supported ? "Rechnung aus weclapp angehängt. Bitte lesen, freigeben und senden." : "Rechnung aus weclapp geholt. Dieser Kanal nimmt keine Dateien an, siehe Hinweis.")}
+                snippets={snippets}
+                onSnippet={(snippetId) => act(() => api<{ missing: string[] }>("POST", `${base}/cases/${caseId}/snippet-reply`, { snippetId }), (r) => {
+                  const missing = (r as { missing: string[] }).missing;
+                  return missing.length ? `Textbaustein übernommen. Ohne Wert geblieben: ${missing.map((m) => `{${m}}`).join(", ")}. Bitte im Entwurf ausfüllen.` : "Textbaustein übernommen. Bitte lesen und freigeben.";
+                })}
                 onCompose={(instruction) => act(() => api("POST", `${base}/cases/${caseId}/compose`, { instruction }), (data.writer ?? "rules") !== "rules" ? "Ausformuliert. Bitte noch einmal lesen und dann freigeben." : "Als Antwort übernommen. Bitte noch einmal lesen und dann freigeben.")}
               />
             )}
@@ -200,6 +231,9 @@ export function CaseView({ workspaceId, caseId, role, onChanged }: { workspaceId
               <DraftEditor
                 key={`${draft.id}:${draft.version}`}
                 draft={draft}
+                snippets={snippets}
+                renderSnippet={(snippetId) => api<{ text: string; missing: string[] }>("GET", `${base}/cases/${caseId}/snippets/${snippetId}`)}
+                onEditing={setEditing}
                 canEdit={canEdit}
                 approval={approval}
                 send={data.send}
@@ -290,7 +324,7 @@ function Concern({ data, draft }: { data: CaseData; draft: Draft | null }) {
   const inbound = [...data.messages].reverse().find((m) => m.direction === "inbound");
   if (!inbound) return null;
   const words = customerText(inbound.body_text);
-  const aiSummary = draft && draft.generated_by !== "rules" && draft.summary ? draft.summary : null;
+  const aiSummary = draft && draft.generated_by !== "rules" && draft.generated_by !== "snippet" && draft.summary ? draft.summary : null;
   return (
     <section className="card concern">
       <div className="row wrap">
@@ -530,8 +564,9 @@ const WRITER_NOTE: Record<string, string> = {
 };
 
 /** First a person decides, then the reply is written: nothing is generated (or paid for) on its own. */
-function Decision({ current, hasDraft, writer, pendingOrder, invoices, orderUnique, onInvoice, onDecide, onCompose }: {
+function Decision({ current, hasDraft, writer, pendingOrder, invoices, orderUnique, onInvoice, onDecide, onCompose, snippets, onSnippet }: {
   current: string | null; hasDraft: boolean; writer: string; pendingOrder: boolean; invoices: string[]; orderUnique: boolean; onInvoice: () => void; onDecide: (decision: string) => void; onCompose: (instruction: string) => void;
+  snippets: SnippetInfo[]; onSnippet: (snippetId: string) => void;
 }) {
   const [fetching, setFetching] = useState(false);
   const [custom, setCustom] = useState(false);
@@ -552,6 +587,14 @@ function Decision({ current, hasDraft, writer, pendingOrder, invoices, orderUniq
           onClick={async () => { setFetching(true); try { await onInvoice(); } finally { setFetching(false); } }}
           title="Holt die Rechnungs-PDF der zugeordneten Bestellung aus weclapp und hängt sie an eine Antwort aus der Vorlage (ohne KI-Kosten). Gesendet wird erst nach Freigabe und Klick auf Senden."
         >{fetching ? "Holt Rechnung …" : "Rechnung senden"}</button>
+        {snippets.length > 0 && (
+          <span className="snippet-pick">
+            <select value="" onChange={(e) => e.target.value && onSnippet(e.target.value)} aria-label="Textbaustein als Antwort" title="Antwort aus einem Textbaustein, mit Daten aus weclapp gefüllt, ohne KI-Kosten">
+              <option value="">Textbaustein …</option>
+              {snippets.map((sn) => <option key={sn.id} value={sn.id}>{sn.title}</option>)}
+            </select>
+          </span>
+        )}
       </div>
       <p className="small muted">
         „Rechnung senden“: {!orderUnique ? "geht erst, wenn die Bestellung eindeutig zugeordnet ist." : invoices.length ? `holt ${invoices.length > 1 ? "die Rechnungen" : "die Rechnung"} ${invoices.join(", ")} als PDF aus weclapp, ohne KI-Kosten.` : "sucht die Rechnung der Bestellung in weclapp und holt sie als PDF, ohne KI-Kosten."}
@@ -573,6 +616,7 @@ function Decision({ current, hasDraft, writer, pendingOrder, invoices, orderUniq
 }
 
 function DraftEditor(props: {
+  snippets: SnippetInfo[]; renderSnippet: (snippetId: string) => Promise<{ text: string; missing: string[] }>; onEditing: (editing: boolean) => void;
   draft: Draft; canEdit: boolean; approval: CaseData["approvals"][number] | undefined; send: CaseData["send"];
   onSave: (body: string) => void; onApprove: (ack: boolean) => void; onSend: (approvalId: string) => void; onDiscard: () => void; canPolish: boolean; onPolish: (body: string) => void;
   documents: DocumentInfo[]; caseFiles: CaseFile[]; replyFiles: { supported: boolean; note: string }; documentBase: string; onDocuments: (ids: string[]) => void; onUpload: (file: File) => void;
@@ -582,15 +626,41 @@ function DraftEditor(props: {
   const [ack, setAck] = useState(false);
   const [polishing, setPolishing] = useState(false);
   const dirty = body !== draft.body;
+  const area = useRef<HTMLTextAreaElement>(null);
+  const [snippetNote, setSnippetNote] = useState<string | null>(null);
+  const { onEditing } = props;
+  useEffect(() => { onEditing(dirty); }, [dirty, onEditing]);
+  useEffect(() => () => onEditing(false), [onEditing]);
+  const insertSnippet = async (snippetId: string) => {
+    try {
+      const r = await props.renderSnippet(snippetId);
+      const el = area.current;
+      const at = el ? el.selectionStart : body.length;
+      const end = el ? el.selectionEnd : body.length;
+      setBody(body.slice(0, at) + r.text + body.slice(end));
+      setSnippetNote(r.missing.length ? `Eingefügt. Ohne Wert geblieben: ${r.missing.map((m) => `{${m}}`).join(", ")}. Bitte ausfüllen, dann speichern.` : "Eingefügt. Bitte speichern.");
+    } catch (err) {
+      setSnippetNote((err as Error).message);
+    }
+  };
   const blocking = draft.issues.filter((i) => i.severity === "block");
   const warnings = draft.issues.filter((i) => i.severity === "warn");
   return (
     <div className="draft">
       <div className="row wrap small">
         {draft.risks.map((r) => <span key={r} className="pill warn">Achtung: {RISK_LABEL[r] ?? r}</span>)}
-        <span className="muted">{draft.decision ? `${DECISION_LABEL[draft.decision] ?? draft.decision}, ` : ""}Entwurf {draft.generated_by === "rules" ? "aus Vorlage" : draft.generated_by === "person" ? "nach deiner Vorgabe" : "von der KI"}{draft.status === "edited" ? ", bearbeitet" : ""}, {fmtDate(draft.updated_at)}</span>
+        <span className="muted">{draft.decision ? `${DECISION_LABEL[draft.decision] ?? draft.decision}, ` : ""}Entwurf {draft.generated_by === "rules" ? "aus Vorlage" : draft.generated_by === "snippet" ? "aus Textbaustein" : draft.generated_by === "person" ? "nach deiner Vorgabe" : "von der KI"}{draft.status === "edited" ? ", bearbeitet" : ""}, {fmtDate(draft.updated_at)}</span>
       </div>
-      <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10} readOnly={!canEdit} />
+      <textarea ref={area} value={body} onChange={(e) => setBody(e.target.value)} rows={10} readOnly={!canEdit} />
+      {canEdit && props.snippets.length > 0 && (
+        <div className="row wrap small snippet-pick">
+          <select value="" onChange={(e) => e.target.value && void insertSnippet(e.target.value)} aria-label="Textbaustein einfügen">
+            <option value="">Textbaustein einfügen …</option>
+            {props.snippets.map((sn) => <option key={sn.id} value={sn.id}>{sn.title}</option>)}
+          </select>
+          {snippetNote && <span className="muted">{snippetNote}</span>}
+        </div>
+      )}
       <DraftFiles draft={draft} canEdit={canEdit && !dirty} documents={props.documents} caseFiles={props.caseFiles} replyFiles={props.replyFiles} base={props.documentBase} onChange={props.onDocuments} onUpload={props.onUpload} />
       {(blocking.length > 0 || warnings.length > 0) && (
         <ul className="issues">
@@ -637,6 +707,27 @@ function DraftEditor(props: {
 }
 
 interface DocumentInfo { id: string; name: string; size: number }
+interface SnippetInfo { id: string; title: string }
+
+/** Date input next to "Wartet": on that day (8:00) the case comes back under "Anfragen". */
+function FollowUp({ value, onSet }: { value: string | null; onSet: (iso: string | null) => void }) {
+  const toInput = (iso: string) => {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  return (
+    <label className="follow-up small">Wiedervorlage am
+      <input type="date" min={toInput(tomorrow.toISOString())} value={value ? toInput(value) : ""}
+        onChange={(e) => {
+          if (!e.target.value) return onSet(null);
+          const [y, m, d] = e.target.value.split("-").map(Number);
+          onSet(new Date(y!, m! - 1, d!, 8, 0, 0).toISOString());
+        }} />
+      {value && <button className="link" onClick={() => onSet(null)}>entfernen</button>}
+    </label>
+  );
+}
 
 const fmtSize = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, fmtDate, PLATFORM_LABEL } from "./api.ts";
+import { DEADLINE_PLATFORMS, DEFAULT_REPLY_DEADLINES, MAX_DEADLINE_HOURS } from "../../../packages/core/deadline.ts";
+import { SNIPPET_PLACEHOLDERS } from "../../../packages/core/snippet-placeholders.ts";
 import { API_MARKETS, MAIL_MARKETS, MARKET_KIND, marketSetup, microsoftSetup, weclappSetup, type ChannelSetup, type StepAction } from "./setup-steps.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -18,7 +20,7 @@ interface Rule { id: string; connection_id: string; priority: number; match_type
 interface Route { id: string; connection_id: string; source_platform: string; evidence_note: string; verified_at: string; verified_by: string | null }
 interface Descriptor { platform: string; label: string; transport: string; implementation: string; receive: string; reply: string; accountTestNeeded: string[]; notes: string }
 interface SettingsData {
-  workspace: { name: string; auto_invoice?: "off" | "draft" | "send"; reply_signature: string; reply_tone: string; allowed_link_prefixes: string[]; ai_enabled: boolean; has_ai_key: boolean; ai_key_hint: string | null; setup_confirmations: Record<string, { at: string; by: string | null }> };
+  workspace: { name: string; auto_invoice?: "off" | "draft" | "send"; reply_signature: string; reply_tone: string; allowed_link_prefixes: string[]; ai_enabled: boolean; has_ai_key: boolean; ai_key_hint: string | null; setup_confirmations: Record<string, { at: string; by: string | null }>; reply_deadlines?: Record<string, number> };
   accounts: Account[]; connections: Connection[]; rules: Rule[]; routes: Route[];
   erp: null | { base_url: string; search_fields: string[]; has_secret: boolean; status: string; last_checked_at: string | null; last_error: string | null };
   categoryRules: Array<{ id: string; match_type: string; pattern: string; category: "support" | "info" }>;
@@ -165,6 +167,9 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
       </section>
 
       <WorkspaceForm data={data} owner={owner} onSave={(body) => act(() => api("PUT", `${base}/settings`, body), () => "Gespeichert.")} />
+
+      <SnippetsCard base={base} canEdit={role !== "viewer"} />
+      <DeadlinesCard value={data.workspace.reply_deadlines ?? {}} owner={owner} onSave={(replyDeadlines) => act(() => api("PUT", `${base}/settings`, { replyDeadlines }), () => "Antwortfrist gespeichert.")} />
 
       <DocumentsCard base={base} owner={owner} />
       <AutoInvoiceCard value={data.workspace.auto_invoice ?? "off"} owner={owner} onChange={(autoInvoice) => void act(() => api("PUT", `${base}/settings`, { autoInvoice }), () => "Gespeichert.")} />
@@ -682,6 +687,96 @@ function DocumentsCard({ base, owner }: { base: string; owner: boolean }) {
       )}
       {message && <p className={message.ok ? "small ok-text" : "small error"} role="status">{message.text}</p>}
       <p className="muted small">Bei eBay gehen keine Dateien mit, dort bitte einen Link oder den Text verwenden.</p>
+    </section>
+  );
+}
+
+/** Hours per platform until a customer message should be answered; saved per field on leaving it. */
+function DeadlinesCard({ value, owner, onSave }: { value: Record<string, number>; owner: boolean; onSave: (v: Record<string, number>) => Promise<void> }) {
+  const current = (p: string) => value[p] ?? DEFAULT_REPLY_DEADLINES[p as keyof typeof DEFAULT_REPLY_DEADLINES] ?? 0;
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  return (
+    <section className="card">
+      <h3>Antwortfristen</h3>
+      <p className="muted small">Ab der ersten unbeantworteten Kundennachricht läuft die Frist. In der Liste zeigt eine Ampel die Restzeit (gelb ab der Hälfte, rot in den letzten Stunden), und was zuerst abläuft, steht oben. „Wartet“ und „Erledigt“ halten die Uhr an. Amazon erwartet 24 Stunden, auch am Wochenende.</p>
+      <div className="deadline-grid">
+        {DEADLINE_PLATFORMS.map((p) => (
+          <label key={p} className="field"><span>{PLATFORM_LABEL[p] ?? p}</span>
+            <span className="row">
+              <input type="number" min={0} max={MAX_DEADLINE_HOURS} step={1} disabled={!owner} value={draft[p] ?? String(current(p))}
+                onChange={(e) => setDraft({ ...draft, [p]: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Escape") setDraft({ ...draft, [p]: String(current(p)) }); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                onBlur={() => {
+                  const raw = draft[p];
+                  if (raw === undefined || raw === String(current(p))) return;
+                  void onSave({ [p]: raw === "" ? 0 : Number(raw) }).then(() => setDraft((d) => { const n = { ...d }; delete n[p]; return n; }));
+                }} />
+              <span className="small muted">Std.</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="muted small">0 = keine Frist. Gilt sofort für alle offenen Fälle.</p>
+    </section>
+  );
+}
+
+interface SnippetRow { id: string; title: string; body: string; updated_at: string }
+
+const SNIPPET_EXAMPLE = "Guten Tag {Name},\n\nvielen Dank für Ihre Nachricht zur Bestellung {Bestellnummer}. Ihr Paket hat die Sendungsnummer {Sendungsnummer}:\n{Trackinglink}\n\n{Signatur}";
+
+/** Text blocks: written once, used in every case with data from weclapp, without AI. */
+function SnippetsCard({ base, canEdit }: { base: string; canEdit: boolean }) {
+  const [list, setList] = useState<SnippetRow[] | null>(null);
+  const [editing, setEditing] = useState<{ id?: string; title: string; body: string } | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => api<{ snippets: SnippetRow[] }>("GET", `${base}/snippets`).then((r) => setList(r.snippets), (e) => setMessage({ ok: false, text: (e as Error).message })), [base]);
+  useEffect(() => void load(), [load]);
+  const run = async (fn: () => Promise<unknown>, text: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await fn();
+      setMessage({ ok: true, text });
+      setEditing(null);
+      await load();
+    } catch (e) {
+      setMessage({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card">
+      <h3>Textbausteine</h3>
+      <p className="muted small">Antworten, die ihr oft schreibt. Im Fall unter „Antwort“ wählen oder in einen Entwurf einfügen. Platzhalter werden aus dem Fall und aus weclapp gefüllt, ohne KI-Kosten: {Object.entries(SNIPPET_PLACEHOLDERS).map(([k, v], i) => <span key={k}>{i ? ", " : ""}<code title={v}>{`{${k}}`}</code></span>)}. Fehlt ein Wert, bleibt der Platzhalter stehen und der Entwurf lässt sich erst nach dem Ausfüllen freigeben.</p>
+      {list === null ? <p className="small muted">Lädt …</p> : list.length === 0 ? <p className="small muted">Noch keine Textbausteine.</p> : (
+        <ul className="snippet-list">
+          {list.map((sn) => (
+            <li key={sn.id}>
+              <div className="row wrap"><strong>{sn.title}</strong><span className="spacer" />
+                {canEdit && <><button className="link" onClick={() => setEditing({ id: sn.id, title: sn.title, body: sn.body })}>bearbeiten</button>
+                <button className="link" disabled={busy} onClick={() => { if (window.confirm(`Textbaustein „${sn.title}“ löschen?`)) void run(() => api("DELETE", `${base}/snippets/${sn.id}`), "Textbaustein gelöscht."); }}>löschen</button></>}
+              </div>
+              <div className="small muted ellipsis">{sn.body.split("\n").find((l) => l.trim() && !/^guten tag|^hallo/i.test(l.trim())) ?? sn.body}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {canEdit && !editing && <button onClick={() => setEditing({ title: "", body: SNIPPET_EXAMPLE })}>Textbaustein anlegen</button>}
+      {canEdit && editing && (
+        <form className="snippet-form" onSubmit={(e) => { e.preventDefault(); void run(() => api("POST", `${base}/snippets`, editing), editing.id ? "Textbaustein gespeichert." : "Textbaustein angelegt."); }}>
+          <label className="field"><span>Name</span><input value={editing.title} maxLength={120} onChange={(e) => setEditing({ ...editing, title: e.target.value })} placeholder="z. B. Sendungsverfolgung" autoFocus /></label>
+          <label className="field"><span>Text</span><textarea rows={8} value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} /></label>
+          <div className="row wrap">
+            <button type="submit" className="primary" disabled={busy || !editing.title.trim() || !editing.body.trim()}>Speichern</button>
+            <button type="button" className="ghost" onClick={() => setEditing(null)}>Abbrechen</button>
+          </div>
+        </form>
+      )}
+      {message && <p className={message.ok ? "small notice ok" : "small error"}>{message.text}</p>}
+      <p className="muted small">Gilt für alle im Team. Inhaber und Bearbeiter dürfen Textbausteine ändern.</p>
     </section>
   );
 }

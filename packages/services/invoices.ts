@@ -138,9 +138,9 @@ export async function fetchCaseInvoices(ctx: AppContext, actor: Actor, conversat
 export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversationId: string): Promise<{ draftId: string; files: CaseFileInfo[]; attached: boolean }> {
   requireRole(actor, ["owner", "agent"]);
   if (!UUID.test(conversationId)) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
-  const conv = await one<{ id: string; version: number; latest_inbound_message_id: string | null; order_match_status: string; kind: ChannelKind }>(
+  const conv = await one<{ id: string; version: number; latest_inbound_message_id: string | null; order_match_status: string; source_platform: string; kind: ChannelKind }>(
     ctx.db,
-    `SELECT c.id, c.version, c.latest_inbound_message_id, c.order_match_status, cc.kind FROM conversations c
+    `SELECT c.id, c.version, c.latest_inbound_message_id, c.order_match_status, c.source_platform, cc.kind FROM conversations c
        JOIN channel_connections cc ON cc.workspace_id = c.workspace_id AND cc.id = c.connection_id
       WHERE c.workspace_id = $1 AND c.id = $2`,
     [actor.workspaceId, conversationId],
@@ -156,7 +156,7 @@ export async function draftInvoiceReply(ctx: AppContext, actor: Actor, conversat
   const invoiceFactIds = facts.filter((f) => /^invoice\.\d+$/.test(f.id) && invoices.some((inv) => f.text.includes(inv.invoiceNumber ?? inv.id))).map((f) => f.id);
   const body = replyText(ws.default_language, invoices.map((inv) => inv.invoiceNumber ?? inv.id), orderNumber, attached, ws.reply_signature);
   const citedFactIds = ["order", ...invoiceFactIds].filter((id) => facts.some((f) => f.id === id));
-  const issues: DraftIssue[] = checkDraft({ text: body, citedFactIds, facts, order, orderStatus: "unique", allowedLinkPrefixes: ws.allowed_link_prefixes });
+  const issues: DraftIssue[] = checkDraft({ text: body, citedFactIds, facts, order, orderStatus: "unique", allowedLinkPrefixes: ws.allowed_link_prefixes, sourcePlatform: conv.source_platform });
 
   const latest = await one<{ body_text: string }>(ctx.db, "SELECT body_text FROM messages WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conv.latest_inbound_message_id]);
   if (ADDRESS_IN_TEXT.test(newestEmailText(latest?.body_text ?? ""))) {

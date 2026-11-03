@@ -5,6 +5,8 @@ import { customerText } from "../core/customer-text.ts";
 import { detectRisks, newestEmailText } from "../core/classify.ts";
 import { checkDraft, hasBlockingIssue, type DraftIssue } from "../core/draft-check.ts";
 import { buildOrderFacts } from "../core/facts.ts";
+import { fillSnippet, type SnippetPlaceholder } from "../core/snippets.ts";
+import { getSnippet } from "./snippets.ts";
 import { AiProviderError } from "../ai/index.ts";
 import { RulesProvider } from "../ai/rules.ts";
 import { many, one, withTx, type Queryable, type Tx } from "../storage/db.ts";
@@ -25,6 +27,7 @@ interface ConversationRow {
   order_match_status: string;
   external_thread_key: string;
   customer_address: string | null;
+  customer_name: string | null;
 }
 
 interface DraftRow {
@@ -135,6 +138,7 @@ export async function generateDraft(ctx: AppContext, workspaceId: string, conver
     order,
     orderStatus: orderStatusForAi(conv.order_match_status),
     allowedLinkPrefixes: ws.allowed_link_prefixes,
+    sourcePlatform: conv.source_platform,
   });
   if (risks.includes("health")) {
     issues.push({ severity: "warn", code: "HEALTH_REVIEW", message: "Gesundheitsbezogene Anfrage: bitte durch fachlich qualifiziertes Personal prüfen lassen." });
@@ -179,7 +183,7 @@ export async function editDraft(ctx: AppContext, actor: Actor, draftId: string, 
     const conv = await loadConversation(tx, actor.workspaceId, draft.conversation_id);
     const { order } = await currentOrder(tx, actor.workspaceId, draft.conversation_id);
     const ws = (await one<WorkspaceRow>(tx, "SELECT allowed_link_prefixes FROM workspaces WHERE id = $1", [actor.workspaceId]))!;
-    const issues = checkDraft({ text: input.body, citedFactIds: draft.cited_fact_ids, facts: draft.facts, order, orderStatus: orderStatusForAi(conv.order_match_status), allowedLinkPrefixes: ws.allowed_link_prefixes });
+    const issues = checkDraft({ text: input.body, citedFactIds: draft.cited_fact_ids, facts: draft.facts, order, orderStatus: orderStatusForAi(conv.order_match_status), allowedLinkPrefixes: ws.allowed_link_prefixes, sourcePlatform: conv.source_platform });
     const updated = await one<{ version: number }>(
       tx,
       "UPDATE drafts SET body = $3, version = version + 1, status = 'edited', issues = $4, updated_by = $5, updated_at = now() WHERE workspace_id = $1 AND id = $2 RETURNING version",
@@ -230,7 +234,7 @@ export async function composeDraft(ctx: AppContext, actor: Actor, conversationId
   const { linkId, order } = await currentOrder(ctx.db, actor.workspaceId, conversationId);
   const facts = order ? buildOrderFacts(order) : [];
   const body = provider.polish ? text : ["Guten Tag,", "", text, "", ws.reply_signature].join("\n");
-  const issues = checkDraft({ text: body, citedFactIds: [], facts, order, orderStatus: orderStatusForAi(conv.order_match_status), allowedLinkPrefixes: ws.allowed_link_prefixes });
+  const issues = checkDraft({ text: body, citedFactIds: [], facts, order, orderStatus: orderStatusForAi(conv.order_match_status), allowedLinkPrefixes: ws.allowed_link_prefixes, sourcePlatform: conv.source_platform });
   const draft = await withTx(ctx.db, async (tx) => {
     await tx.query("UPDATE drafts SET status = 'superseded', updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND status IN ('proposed','edited')", [actor.workspaceId, conversationId]);
     const row = await one<{ id: string; version: number }>(
@@ -246,6 +250,55 @@ export async function composeDraft(ctx: AppContext, actor: Actor, conversationId
   if (!provider.polish) return { draftId: draft.id, worded: false };
   await polishDraft(ctx, actor, draft.id, { body: text, expectedVersion: draft.version });
   return { draftId: draft.id, worded: true };
+}
+
+/**
+ * A text block filled for this case: customer name, order numbers, parcel numbers and
+ * tracking links from weclapp (only for a uniquely linked order), signature. No AI.
+ */
+export async function renderSnippet(ctx: AppContext, actor: Actor, conversationId: string, snippetId: string): Promise<{ title: string; text: string; missing: SnippetPlaceholder[] }> {
+  const snippet = await getSnippet(ctx, actor, snippetId);
+  const conv = await loadConversation(ctx.db, actor.workspaceId, conversationId);
+  const { order } = await currentOrder(ctx.db, actor.workspaceId, conversationId);
+  const ws = (await one<WorkspaceRow>(ctx.db, "SELECT reply_signature FROM workspaces WHERE id = $1", [actor.workspaceId]))!;
+  const filled = fillSnippet(snippet.body, { customerName: conv.customer_name, order, signature: ws.reply_signature });
+  return { title: snippet.title, ...filled };
+}
+
+/**
+ * "Textbaustein" as the answer: the filled block becomes the draft, without AI and
+ * without cost. The draft check and approval apply as always; an open placeholder blocks.
+ */
+export async function snippetDraft(ctx: AppContext, actor: Actor, conversationId: string, snippetId: string): Promise<{ draftId: string; missing: SnippetPlaceholder[] }> {
+  requireRole(actor, ["owner", "agent"]);
+  const conv = await loadConversation(ctx.db, actor.workspaceId, conversationId);
+  if (!conv.latest_inbound_message_id) throw new ServiceError(409, "NO_MESSAGE", "In diesem Fall gibt es keine Kundennachricht zum Beantworten.");
+  const rendered = await renderSnippet(ctx, actor, conversationId, snippetId);
+  const ws = (await one<WorkspaceRow>(ctx.db, "SELECT allowed_link_prefixes FROM workspaces WHERE id = $1", [actor.workspaceId]))!;
+  const { linkId, order } = await currentOrder(ctx.db, actor.workspaceId, conversationId);
+  const facts = order ? buildOrderFacts(order) : [];
+  const issues = checkDraft({ text: rendered.text, citedFactIds: [], facts, order, orderStatus: orderStatusForAi(conv.order_match_status), allowedLinkPrefixes: ws.allowed_link_prefixes, sourcePlatform: conv.source_platform });
+  const latest = await one<{ body_text: string }>(ctx.db, "SELECT body_text FROM messages WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conv.latest_inbound_message_id]);
+  const risks = detectRisks(newestEmailText(latest?.body_text ?? ""));
+  if (risks.includes("health")) issues.push({ severity: "warn", code: "HEALTH_REVIEW", message: "Gesundheitsbezogene Anfrage: bitte durch fachlich qualifiziertes Personal prüfen lassen." });
+  const draftId = await withTx(ctx.db, async (tx) => {
+    const locked = await loadConversation(tx, actor.workspaceId, conversationId, true);
+    if (locked.latest_inbound_message_id !== conv.latest_inbound_message_id) throw new ServiceError(409, "VERSION_CONFLICT", "Inzwischen ist eine neue Kundennachricht da. Bitte neu laden.");
+    // The topic stays what an earlier draft recognised; a text block does not classify.
+    const earlier = await one<{ intent: string }>(tx, "SELECT intent FROM drafts WHERE workspace_id = $1 AND conversation_id = $2 ORDER BY created_at DESC LIMIT 1", [actor.workspaceId, conversationId]);
+    await tx.query("UPDATE drafts SET status = 'superseded', updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND status IN ('proposed','edited')", [actor.workspaceId, conversationId]);
+    const row = await one<{ id: string }>(
+      tx,
+      `INSERT INTO drafts (workspace_id, conversation_id, based_on_conversation_version, inbound_message_id, order_link_id, intent, summary, body,
+         cited_fact_ids, facts, missing_information, suggested_actions, risks, issues, generated_by, ai_model, prompt_version, decision)
+       VALUES ($1,$2,$3,$4,$5,$11,$6,$7,'{}',$8,'[]','["none"]',$9,$10,'snippet',NULL,NULL,'custom') RETURNING id`,
+      [actor.workspaceId, conversationId, locked.version, locked.latest_inbound_message_id, linkId, `Textbaustein „${rendered.title}“.`, rendered.text,
+        JSON.stringify(facts), risks, JSON.stringify(issues), earlier?.intent ?? "other"],
+    );
+    await audit(tx, actor, "draft.snippet", "draft", row!.id, { snippetId, missing: rendered.missing });
+    return row!.id;
+  });
+  return { draftId, missing: rendered.missing };
 }
 
 /** Which writer this workspace uses: its own Claude key, the installation's Claude, or the free templates. */

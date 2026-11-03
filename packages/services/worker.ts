@@ -1,6 +1,7 @@
 import { autoInvoice } from "./invoices.ts";
 import { AiProviderError } from "../ai/index.ts";
 import { many } from "../storage/db.ts";
+import { reopenDueFollowUps } from "./cases.ts";
 import type { AppContext } from "./context.ts";
 import { runMailSync } from "./ingestion.ts";
 import { claimJob, completeJob, enqueue, failJob, type JobRow } from "./jobs.ts";
@@ -120,4 +121,5 @@ export async function scheduleTick(ctx: AppContext): Promise<void> {
     await enqueue(ctx.db, { workspaceId: row.workspace_id, type: "mail.subscription", payload: { connectionId: row.id }, dedupeKey: `mail.subscription:${row.id}`, maxAttempts: 3, delayMs: 0 });
   }
   await sweepStaleDispatches(ctx);
+  await reopenDueFollowUps(ctx);
 }

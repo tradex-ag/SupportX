@@ -180,7 +180,7 @@ export async function ingestMessage(tx: Tx, connection: ChannelConnectionRow, ru
 
   if (kind === "manual_external") {
     await tx.query(
-      "UPDATE conversations SET version = version + 1, status = 'waiting', last_message_at = greatest(last_message_at, $3), updated_at = now() WHERE workspace_id = $1 AND id = $2",
+      "UPDATE conversations SET version = version + 1, status = 'waiting', snooze_until = NULL, last_message_at = greatest(last_message_at, $3), updated_at = now() WHERE workspace_id = $1 AND id = $2",
       [ws, conversation.id, message.receivedAt],
     );
     await invalidateConversationApprovals(tx, ws, conversation.id, "Antwort außerhalb der Anwendung erkannt");
@@ -207,7 +207,7 @@ export async function ingestMessage(tx: Tx, connection: ChannelConnectionRow, ru
     }
   }
   await tx.query(
-    `UPDATE conversations SET version = version + 1, latest_inbound_message_id = $3, status = 'open', order_references = $4,
+    `UPDATE conversations SET version = version + 1, latest_inbound_message_id = $3, status = 'open', snooze_until = NULL, order_references = $4,
        last_message_at = greatest(coalesce(last_message_at, $5), $5), updated_at = now()
      WHERE workspace_id = $1 AND id = $2`,
     [ws, conversation.id, inserted.id, JSON.stringify(refs.slice(0, 10)), message.receivedAt],
@@ -340,7 +340,7 @@ export async function mergeSplitFollowUps(db: Db): Promise<number> {
       const refs = [...target.order_references];
       for (const r of source.order_references) if (!refs.some((x) => x.value === r.value)) refs.push(r);
       await tx.query(
-        `UPDATE conversations SET version = version + 1, status = 'open', order_references = $3, updated_at = now(),
+        `UPDATE conversations SET version = version + 1, status = 'open', snooze_until = NULL, order_references = $3, updated_at = now(),
            latest_inbound_message_id = (SELECT id FROM messages WHERE workspace_id = $1 AND conversation_id = $2 AND direction = 'inbound' AND kind = 'customer' ORDER BY received_at DESC LIMIT 1),
            last_message_at = (SELECT max(received_at) FROM messages WHERE workspace_id = $1 AND conversation_id = $2)
          WHERE workspace_id = $1 AND id = $2`,
