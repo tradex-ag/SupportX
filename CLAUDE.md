@@ -1,6 +1,6 @@
 # Implementation brief for Claude Code
 
-You are working on SupportX, a new independent MIT-licensed project. Read `README.md`, `docs/BUILD_PLAN.de.md`, `docs/ARCHITECTURE.md`, `docs/CONNECTORS.md`, `docs/SOURCES.md`, `docs/ROADMAP.md` and the existing core before implementation.
+You are working on SupportX, a new independent project licensed under AGPL-3.0-only (attribution term in `NOTICE`; keep the UI credit line naming SupportX, ASEIO, TradeX International AG and Lars Orlamünde). Read `README.md`, `docs/BUILD_PLAN.de.md`, `docs/ARCHITECTURE.md`, `docs/CONNECTORS.md`, `docs/SOURCES.md`, `docs/ROADMAP.md` and the existing core before implementation.
 
 ## Current state (0.1.0)
 
