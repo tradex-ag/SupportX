@@ -178,7 +178,7 @@ function Login({ onDone, brand }: { onDone: () => void; brand: Brand }) {
       <label>Passwort<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required /></label>
       {error && <p className="error">{error}</p>}
       <button className="primary" type="submit">Anmelden</button>
-      <p className="small muted credit">SupportX ist Open Source (<a href="https://github.com/tradexag/supportx" target="_blank" rel="noopener">AGPL-3.0, Quellcode</a>), ein Produkt von <a href="https://aseio.app" target="_blank" rel="noopener">ASEIO</a> · TradeX International AG, Lars Orlamünde</p>
+      <p className="small muted credit">SupportX ist Open Source (<a href="https://github.com/tradex-ag/SupportX" target="_blank" rel="noopener">AGPL-3.0, Quellcode</a>), ein Produkt von <a href="https://aseio.app" target="_blank" rel="noopener">ASEIO</a> · TradeX International AG, Lars Orlamünde</p>
     </form>
   );
 }

@@ -18,7 +18,7 @@ Return the common structured proposal contract. Do not introduce a provider-spec
 
 ## Licensing and how to give changes back
 
-SupportX is licensed under AGPL-3.0-only with the attribution term in [NOTICE](NOTICE). If you run a modified SupportX for others or distribute it, you must publish your source under the same license. Please do not stop there: open a pull request against https://github.com/tradexag/supportx so the improvement reaches everyone.
+SupportX is licensed under AGPL-3.0-only with the attribution term in [NOTICE](NOTICE). If you run a modified SupportX for others or distribute it, you must publish your source under the same license. Please do not stop there: open a pull request against https://github.com/tradex-ag/SupportX so the improvement reaches everyone.
 
 By opening a pull request you confirm that you wrote the contribution or are otherwise entitled to submit it, that it is licensed under AGPL-3.0-only, and that you grant TradeX International AG a perpetual, worldwide, non-exclusive, royalty-free right to use, change, sublicense and relicense the contribution, including under other license terms. You keep your own copyright. Add a `Signed-off-by:` line to each commit (`git commit -s`, Developer Certificate of Origin, https://developercertificate.org/) to state this.
 
