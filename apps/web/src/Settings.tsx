@@ -517,21 +517,36 @@ function MiraklForm({ onSubmit, onCancel }: { onSubmit: (body: unknown) => void;
 }
 
 
-interface DesignReading { theme: unknown; found: Array<{ field: string; label: string; value: string }>; warnings: string[] }
-interface WorkspaceThemeInfo { custom: { productName?: string; colors: Record<string, string>; fonts: { sans?: string; mono?: string }; radius?: number } | null }
+interface DesignReading { theme: unknown; found: Array<{ field: string; label: string; value: string }>; warnings: string[]; css: string }
+interface WorkspaceThemeInfo { custom: { productName?: string; colors: Record<string, string>; fonts: { sans?: string; mono?: string }; radius?: number } | null; logoUrl: string | null }
+const MAX_LOGO = 300_000;
+const PREVIEW_STYLE = "ws-theme-preview";
 
-/** Look of this workspace from an uploaded DESIGN.md: preview first, active only after "Übernehmen". */
+/** Shows a look on the whole page without saving it; null removes the preview. */
+function showPreview(css: string | null) {
+  document.getElementById(PREVIEW_STYLE)?.remove();
+  if (css === null) return;
+  const el = document.createElement("style");
+  el.id = PREVIEW_STYLE;
+  el.textContent = css;
+  document.head.appendChild(el);
+}
+
+/** Look of this workspace from an uploaded DESIGN.md and logo: preview on the page first, active only after "Übernehmen". */
 function DesignCard({ base, owner }: { base: string; owner: boolean }) {
-  const [current, setCurrent] = useState<WorkspaceThemeInfo["custom"]>(null);
+  const [info, setInfo] = useState<WorkspaceThemeInfo>({ custom: null, logoUrl: null });
   const [reading, setReading] = useState<DesignReading | null>(null);
   const [fileName, setFileName] = useState("");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const current = info.custom;
   const reload = useCallback(async () => {
-    const t = await api<WorkspaceThemeInfo>("GET", `${base}/theme`).catch(() => ({ custom: null }));
-    setCurrent(t.custom);
+    const t = await api<WorkspaceThemeInfo>("GET", `${base}/theme`).catch(() => ({ custom: null, logoUrl: null }));
+    setInfo({ custom: t.custom, logoUrl: t.logoUrl });
   }, [base]);
   useEffect(() => void reload(), [reload]);
+  // Leaving the settings ends an unsaved preview.
+  useEffect(() => () => showPreview(null), []);
   const changed = () => window.dispatchEvent(new Event("supportx-theme"));
 
   const run = async (fn: () => Promise<void>) => {
@@ -543,11 +558,29 @@ function DesignCard({ base, owner }: { base: string; owner: boolean }) {
     if (!file) return;
     if (file.size > 200_000) return setMessage({ ok: false, text: "Die Datei ist zu groß (höchstens 200 KB)." });
     setFileName(file.name);
-    void run(async () => setReading(await api<DesignReading>("POST", `${base}/design/preview`, { text: await file.text() })));
+    void run(async () => {
+      const r = await api<DesignReading>("POST", `${base}/design/preview`, { text: await file.text() });
+      setReading(r);
+      showPreview(r.found.length > 0 ? r.css : null);
+    });
   };
-  const summary = current
-    ? `Eigenes Design aktiv · ${Object.keys(current.colors).length} Farben${current.fonts.sans ? ` · ${current.fonts.sans.split(",")[0]!.replace(/"/g, "")}` : ""}`
-    : "Standard-Design";
+  const discard = () => { showPreview(null); setReading(null); };
+  const onLogo = (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > MAX_LOGO) return setMessage({ ok: false, text: "Das Logo ist zu groß (höchstens 300 KB)." });
+    void run(async () => {
+      await api("PUT", `${base}/logo`, { base64: await readBase64(file) });
+      await reload();
+      changed();
+      setMessage({ ok: true, text: "Logo übernommen. Es steht jetzt oben links." });
+    });
+  };
+  const parts = [
+    current ? `${Object.keys(current.colors).length} Farben` : null,
+    current?.fonts.sans ? current.fonts.sans.split(",")[0]!.replace(/"/g, "") : null,
+    info.logoUrl ? "eigenes Logo" : null,
+  ].filter(Boolean);
+  const summary = parts.length ? `Eigenes Design aktiv · ${parts.join(" · ")}` : "Standard-Design";
   const swatches = (found: DesignReading["found"]) => (
     <ul className="design-found">
       {found.map((f) => (
@@ -564,16 +597,20 @@ function DesignCard({ base, owner }: { base: string; owner: boolean }) {
     <section className="card">
       <h3>Design</h3>
       <p className="muted small">{summary}</p>
-      <p className="muted small">Lade eine DESIGN.md hoch. SupportX liest daraus Farben (als #rrggbb mit Rolle, z. B. „Hintergrund: #ffffff“), Schriften und den Eckenradius. Vor dem Übernehmen siehst du, was erkannt wurde. Schlecht lesbare Farbpaare werden nicht übernommen.</p>
-      {owner && (
-        <label className="file-pick">
-          <input type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" disabled={busy} onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
-          <span className="button">design.md auswählen</span>
-        </label>
-      )}
+      <p className="muted small">Lade eine DESIGN.md hoch, damit SupportX zu deinem Auftritt passt. SupportX liest daraus Farben (als #rrggbb mit Rolle, z. B. „Hintergrund: #ffffff“), Schriften, den Eckenradius und den Namen oben links. Am einfachsten: Vorlage herunterladen, Werte ändern, wieder hochladen. Vor dem Übernehmen siehst du die ganze Seite im neuen Design. Schlecht lesbare Farbpaare werden nicht übernommen.</p>
+      <div className="row">
+        {owner && (
+          <label className="file-pick">
+            <input type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" disabled={busy} onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
+            <span className="button">DESIGN.md hochladen</span>
+          </label>
+        )}
+        <a className="button" href={`${base}/design.md`} download>{current ? "Aktuelles Design herunterladen" : "Vorlage herunterladen"}</a>
+      </div>
       {reading && (
         <div className="design-preview">
           <h4>Erkannt in {fileName}</h4>
+          {reading.found.length > 0 && <p className="small design-live" role="status">Vorschau: Die Seite zeigt gerade dieses Design. Gespeichert wird es erst mit „Übernehmen“.</p>}
           {reading.found.length > 0 && swatches(reading.found)}
           {reading.warnings.map((w) => <p key={w} className="small warn-text">{w}</p>)}
           <div className="row">
@@ -582,20 +619,40 @@ function DesignCard({ base, owner }: { base: string; owner: boolean }) {
               setReading(null);
               await reload();
               changed();
+              showPreview(null);
               setMessage({ ok: true, text: r.warnings.length ? `Übernommen. ${r.warnings.join(" ")}` : "Übernommen. Das Design gilt jetzt für diesen Arbeitsbereich." });
             })}>Übernehmen</button>}
-            <button disabled={busy} onClick={() => setReading(null)}>Verwerfen</button>
+            <button disabled={busy} onClick={discard}>Verwerfen</button>
           </div>
         </div>
       )}
-      {owner && current && !reading && (
+      <div className="design-logo">
+        <h4>Logo</h4>
+        {info.logoUrl ? <img className="logo-preview" src={info.logoUrl} alt="Eigenes Logo" /> : <p className="muted small">Kein eigenes Logo. Oben links steht der Name.</p>}
+        {owner && (
+          <div className="row">
+            <label className="file-pick">
+              <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(e) => { onLogo(e.target.files?.[0]); e.target.value = ""; }} />
+              <span className="button">{info.logoUrl ? "Anderes Logo hochladen" : "Logo hochladen"}</span>
+            </label>
+            {info.logoUrl && <button disabled={busy} onClick={() => void run(async () => {
+              await api("DELETE", `${base}/logo`);
+              await reload();
+              changed();
+              setMessage({ ok: true, text: "Logo entfernt." });
+            })}>Logo entfernen</button>}
+          </div>
+        )}
+        <p className="muted small">PNG, JPG oder WebP, höchstens 300 KB. Am besten quer, mit durchsichtigem Hintergrund.</p>
+      </div>
+      {owner && (current || info.logoUrl) && !reading && (
         <div className="row">
           <button disabled={busy} onClick={() => void run(async () => {
             await api("DELETE", `${base}/design`);
             await reload();
             changed();
             setMessage({ ok: true, text: "Standard-Design wiederhergestellt." });
-          })}>Zurücksetzen</button>
+          })}>Auf Standard zurücksetzen</button>
         </div>
       )}
       {message && <p className={message.ok ? "small ok-text" : "small error"} role="status">{message.text}</p>}

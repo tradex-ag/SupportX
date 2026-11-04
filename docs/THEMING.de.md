@@ -2,7 +2,19 @@
 
 Jede SupportX-Installation kann wie die Website des Kunden aussehen: eigener Name, Logo, Farben, Schriften und Eckenradius. Das Design steht in einer Datei, nicht im Code. Ein Update von SupportX überschreibt es nicht.
 
-## So geht es
+## Ohne Server-Zugang: in der Oberfläche (je Arbeitsbereich)
+
+Der Inhaber eines Arbeitsbereichs kann das Design selbst anpassen, unter **Einstellungen → Design**:
+
+1. **Vorlage herunterladen**: eine `DESIGN.md` mit allen Feldern und den aktuellen Werten.
+2. Werte ändern (Farben, Schriften, Eckenradius, Name oben links) und **DESIGN.md hochladen**. Auch andere DESIGN.md-Dateien werden gelesen: Fließtext mit Rolle und Farbe, Token-Tabellen (`--brand: #…`) und Dateien mit Kopfbereich (`colors:`, `on-surface`, `fontFamily`, `rounded`).
+3. Die ganze Seite zeigt sofort eine **Vorschau**. Gespeichert wird erst mit **Übernehmen**, **Verwerfen** stellt den alten Stand her.
+4. **Logo hochladen**: PNG, JPG oder WebP bis 300 KB, steht dann oben links statt des Namens. SVG wird nicht angenommen (kann Skripte enthalten).
+5. **Auf Standard zurücksetzen** entfernt Farben, Schriften, Name und Logo des Arbeitsbereichs.
+
+Schlecht lesbare Farbpaare werden nicht übernommen, externe Schriftdateien und Links nicht geladen. Das Design des Arbeitsbereichs liegt über dem Design der Installation (unten).
+
+## Für die ganze Installation (Server)
 
 1. Auf dem Server neben `deploy/` einen Ordner `theme/` anlegen.
 2. Darin eine `theme.json` ablegen (Vorlagen: `examples/themes/`), dazu bei Bedarf Logo und Schriftdateien.
