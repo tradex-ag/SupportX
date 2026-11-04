@@ -37,11 +37,12 @@ import { EBAY_DELETION_PATH, ebayChallengeResponse } from "../../packages/connec
 import { handleEbayAccountDeletion } from "../../packages/services/ebay-account-deletion.ts";
 import { ServiceError, type Actor, type AppContext } from "../../packages/services/context.ts";
 import { enqueue } from "../../packages/services/jobs.ts";
-import { linkOrderManually, setConversationAccount } from "../../packages/services/matching.ts";
+import { linkOrderManually, refreshOrderLink, setConversationAccount } from "../../packages/services/matching.ts";
 import { getMessageAttachment, listMessageAttachments } from "../../packages/services/attachments.ts";
 import { attachUploadedFile, deleteDocument, getDocument, listDocuments, setDraftDocuments, uploadDocument } from "../../packages/services/documents.ts";
 import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
-import { previewDesign, resetDesign, saveDesign, workspaceTheme } from "../../packages/services/design.ts";
+import { deleteLogo, getLogo, logoVersion, previewDesign, resetDesign, saveDesign, saveLogo, workspaceTheme } from "../../packages/services/design.ts";
+import { writeDesignMd, type WorkspaceTheme } from "../../packages/core/design-md.ts";
 import { approveAndSendMany, batchCandidates } from "../../packages/services/batch.ts";
 import { supportReport } from "../../packages/services/reports.ts";
 import { evidencePdf } from "../../packages/services/evidence.ts";
@@ -94,20 +95,46 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.get("/theme.css", async (_req, reply) => reply.type("text/css; charset=utf-8").header("Cache-Control", "no-cache").send(css));
   app.get("/api/theme", async () => publicTheme(theme));
   // Workspace look from an uploaded DESIGN.md, layered over the installation theme.
+  const mergeTheme = (own: WorkspaceTheme): Theme => parseTheme({ ...theme, productName: own.productName ?? theme.productName, colors: { ...theme.colors, ...own.colors }, fonts: { ...theme.fonts, ...own.fonts }, radius: own.radius ?? theme.radius });
   app.get("/api/w/:ws/theme", async (req) => {
-    const own = await workspaceTheme(ctx, await actor(req));
-    if (!own) return { custom: null, css: "", productName: theme.productName };
-    const merged = parseTheme({ ...theme, productName: own.productName ?? theme.productName, colors: { ...theme.colors, ...own.colors }, fonts: { ...theme.fonts, ...own.fonts }, radius: own.radius ?? theme.radius });
-    return { custom: own, css: themeCss(merged), productName: merged.productName };
+    const who = await actor(req);
+    const [own, logo] = await Promise.all([workspaceTheme(ctx, who), logoVersion(ctx, who)]);
+    const logoUrl = logo ? `/api/w/${who.workspaceId}/logo?v=${logo}` : null;
+    if (!own) return { custom: null, css: "", productName: theme.productName, logoUrl };
+    const merged = mergeTheme(own);
+    return { custom: own, css: themeCss(merged), productName: merged.productName, logoUrl };
   });
   app.post("/api/w/:ws/design/preview", async (req) => {
     const body = parse(z.object({ text: z.string().max(400_000) }), req.body);
-    return previewDesign(await actor(req), body.text);
+    const reading = previewDesign(await actor(req), body.text);
+    // CSS of the whole look, so the page can show it before anything is saved.
+    return { ...reading, css: themeCss(mergeTheme(reading.theme)) };
   });
   app.put("/api/w/:ws/design", async (req) => saveDesign(ctx, await actor(req), req.body));
   app.delete("/api/w/:ws/design", async (req) => {
     await resetDesign(ctx, await actor(req));
     return { ok: true };
+  });
+  // Current look (or the standard look as template) as DESIGN.md, to edit and upload again.
+  app.get("/api/w/:ws/design.md", async (req, reply) => {
+    const own = await workspaceTheme(ctx, await actor(req));
+    const t = own ? mergeTheme(own) : theme;
+    const { soft: _soft, ...colors } = t.colors;
+    const text = writeDesignMd({ productName: t.productName, colors, fonts: { sans: t.fonts.sans, mono: t.fonts.mono }, radius: t.radius }, { custom: Boolean(own) });
+    return reply.type("text/markdown; charset=utf-8").header("Content-Disposition", `attachment; filename="${own ? "DESIGN" : "DESIGN-Vorlage"}.md"`).header("Cache-Control", "no-store").send(text);
+  });
+  app.put("/api/w/:ws/logo", { bodyLimit: 500_000 }, async (req) => {
+    const body = parse(z.object({ base64: z.string().max(450_000) }), req.body);
+    return saveLogo(ctx, await actor(req), body.base64);
+  });
+  app.delete("/api/w/:ws/logo", async (req) => {
+    await deleteLogo(ctx, await actor(req));
+    return { ok: true };
+  });
+  app.get("/api/w/:ws/logo", async (req, reply) => {
+    const logo = await getLogo(ctx, await actor(req));
+    if (!logo) return reply.status(404).send({ error: "NOT_FOUND", message: "Kein Logo hinterlegt." });
+    return reply.type(logo.type).header("X-Content-Type-Options", "nosniff").header("Content-Security-Policy", "default-src 'none'").header("Cache-Control", "private, max-age=86400").send(logo.bytes);
   });
   if (ctx.config.THEME_DIR && existsSync(ctx.config.THEME_DIR)) {
     await app.register(fastifyStatic, { root: path.resolve(ctx.config.THEME_DIR), prefix: "/theme/", decorateReply: false, index: false, allowedPath: (p) => /^\/[\w.-]+\.(svg|png|jpe?g|webp|woff2?|ttf|otf)$/i.test(p) });
@@ -242,6 +269,8 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     const body = parse(z.object({ reference: z.string().max(60).optional(), candidateId: z.string().max(60).optional() }), req.body);
     return { status: await linkOrderManually(ctx, await actor(req), (req.params as { id: string }).id, body) };
   });
+  // Read the linked order again from weclapp (GET only), e.g. to see a return created later.
+  app.post("/api/w/:ws/cases/:id/order-refresh", async (req) => refreshOrderLink(ctx, await actor(req), (req.params as { id: string }).id));
   app.post("/api/w/:ws/cases/:id/redraft", async (req) => {
     const body = parse(z.object({ decision: z.enum(["customer_right", "customer_wrong", "ask_customer"]) }), req.body);
     await requestRedraft(ctx, await actor(req), (req.params as { id: string }).id, body.decision);

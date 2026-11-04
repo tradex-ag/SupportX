@@ -1,6 +1,7 @@
 import { OWN_COPY_REASON, ownCopyText } from "../core/category.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { customerText } from "../core/customer-text.ts";
+import { RETURN_STATUS_DE, returnSummary } from "../core/returns.ts";
 import { renderPdf, type PdfBlock } from "../core/simple-pdf.ts";
 import { trackingHref } from "../core/tracking.ts";
 import { many, one } from "../storage/db.ts";
@@ -79,6 +80,13 @@ export async function evidencePdf(ctx: AppContext, actor: Actor, conversationId:
         const href = p.trackingUrl ? trackingHref(p.trackingUrl, p.trackingId) : null;
         b.push({ kind: "text", text: `  Paket: Sendungsnummer ${p.trackingId ?? "–"}${p.carrierId ? `, Versanddienst ${p.carrierId}` : ""}${href ? `, ${href}` : ""}` });
       }
+    }
+    const rs = returnSummary(order);
+    b.push({ kind: "heading", text: "Retoure" });
+    b.push({ kind: "text", text: `${rs.label}. ${rs.advice}` });
+    for (const r of rs.returns) {
+      b.push({ kind: "text", text: `Retoure ${r.returnNumber ?? r.id}${r.erpStatus ? ` · ${RETURN_STATUS_DE[r.erpStatus] ?? r.erpStatus}` : ""}${r.erpStatusAt ? ` (${when(r.erpStatusAt)})` : ""}` });
+      if (r.items.length) kv("  Inhalt", r.items.map((i) => `${i.quantity} × ${i.title ?? "Position"}${i.reason ? ` (Grund: ${i.reason})` : ""}`).join(", "));
     }
     if (order.invoices.length) {
       b.push({ kind: "heading", text: "Rechnungen" });

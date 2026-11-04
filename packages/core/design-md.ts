@@ -35,6 +35,8 @@ export const COLOR_LABEL: Record<ColorField, string> = {
 
 /** Keyword rules, most specific first; the first colour of a matching line wins. */
 const RULES: ReadonlyArray<[ColorField, RegExp]> = [
+  // "on-surface" / "on-background" (Material-style tokens) name the text colour, not the surface.
+  ["text", /on[- ]?(surface|background)\b/],
   ["primaryText", /on[- ]?primary|button[- ]?text|primary[- ]?text|text auf (dem )?(haupt)?knopf|knopfschrift|schrift auf/],
   ["textSecondary", /secondary text|text[- ]?secondary|sekundär|nebentext|graphite/],
   ["muted", /muted|gedämpft|hinweis|caption|placeholder|subtle/],
@@ -138,7 +140,7 @@ export function readDesignMd(text: string): DesignReading {
     // Fonts: bold names in a typography context (each judged by the words just before it),
     // otherwise an explicit "font-family: …" / "Schrift: …".
     const fontLine = !/smoothing|variant|feature|size|weight|gewicht|größe/.test(lower);
-    const explicit = fontLine ? /(?:font-family|schriftart|schrift|font|typeface)\s*[:=]\s*(.+)$/i.exec(line)?.[1] : undefined;
+    const explicit = fontLine ? /(?:font-?family|schriftart|schrift|font|typeface)\s*[:=]\s*(.+)$/i.exec(line)?.[1] : undefined;
     const bolds = fontLine && (explicit || /schrift|typo|font/.test(heading) || /schrift|font/.test(lower)) ? [...line.matchAll(/\*\*([A-Z][\w -]{1,40})\*\*/g)] : [];
     const takeFont = (name: string, mono: boolean) => {
       if (mono) raw.fonts.mono ??= cleanFamily(name, "ui-monospace, monospace");
@@ -150,7 +152,7 @@ export function readDesignMd(text: string): DesignReading {
       takeFont(explicit, /mono|code/.test(lower) || /mono/i.test(explicit));
     }
     // Radius: on the line that names it or in the few lines right after.
-    if (/radius|ecken|rundung|corner/.test(lower)) radiusWindow = 4;
+    if (/radius|ecken|rundung|corner|rounded/.test(lower)) radiusWindow = 4;
     if (raw.radius === undefined && radiusWindow > 0) {
       const px = /(\d+(?:\.\d+)?)\s*px/.exec(lower)?.[1];
       if (px) raw.radius = Math.min(24, Math.max(0, Number(px)));
@@ -173,4 +175,71 @@ export function readDesignMd(text: string): DesignReading {
   if (found.length === 0) warnings.push("In der Datei wurden keine Farben, Schriften oder Radien erkannt. Farben bitte als #rrggbb mit Rolle angeben, z. B. „Hintergrund: #ffffff“.");
   if (/fonts\.googleapis|@import|url\(/i.test(text)) warnings.push("Externe Schriftdateien und Links werden nicht geladen. Die Schrift wird nur genutzt, wenn sie auf dem Gerät vorhanden ist.");
   return { theme, found, warnings };
+}
+
+const FIELD_HELP: Record<ColorField, string> = {
+  background: "Hintergrund der Seite",
+  surface: "Karten, Felder und Listen",
+  text: "Haupttext",
+  textSecondary: "Nebentext",
+  muted: "Hinweise und kleine Beschriftungen",
+  line: "Linien und Rahmen",
+  primary: "Hauptknopf und aktive Reiter",
+  primaryText: "Schrift auf dem Hauptknopf",
+  accent: "Akzent und Signalfarbe",
+};
+
+/** Full set of values to write out: the workspace's own values over the installation look. */
+export interface FullDesign {
+  productName: string;
+  colors: Record<ColorField, string>;
+  fonts: { sans: string; mono: string };
+  radius: number;
+}
+
+/**
+ * Writes a DESIGN.md that `readDesignMd` reads back to the same values: a short guide
+ * plus the JSON block. Used as template (standard look) and as export of the current look.
+ */
+export function writeDesignMd(design: FullDesign, opts: { custom: boolean }): string {
+  const json = {
+    productName: design.productName,
+    colors: Object.fromEntries(COLOR_FIELDS.map((f) => [f, design.colors[f]])),
+    fonts: design.fonts,
+    radius: design.radius,
+  };
+  const rows = COLOR_FIELDS.map((f) => `| \`${f}\` | ${COLOR_LABEL[f]} | ${FIELD_HELP[f]} |`).join("\n");
+  return `# Design für SupportX
+
+${opts.custom ? "Das ist das aktuelle Design dieses Arbeitsbereichs." : "Das ist das Standard-Design von SupportX als Vorlage."}
+Werte im JSON-Block unten ändern und die Datei unter **Einstellungen → Design** wieder hochladen.
+Vor dem Übernehmen zeigt SupportX eine Vorschau.
+
+## Regeln
+
+- Farben als Hex-Wert mit sechs Stellen (Raute, dann rrggbb).
+- Farbpaare, die schlecht lesbar wären (z. B. heller Text auf hellem Hintergrund), übernimmt SupportX nicht.
+- Schriften werden nur genutzt, wenn sie auf dem Gerät vorhanden sind. Externe Schriftdateien und Links lädt SupportX nicht.
+- Eckenradius in Pixeln, 0 bis 24.
+- \`productName\` steht oben links, solange kein Logo hochgeladen ist.
+- Felder, die fehlen, bleiben beim Standard.
+
+## Felder
+
+| Feld | In SupportX | Wofür |
+| --- | --- | --- |
+${rows}
+| \`fonts.sans\` | Schrift | Alle Texte |
+| \`fonts.mono\` | Schrift für Code und Kennungen | Bestellnummern, Kennungen |
+| \`radius\` | Eckenradius | Karten, Knöpfe, Felder |
+
+Statt des JSON-Blocks geht auch Fließtext mit Rolle und Wert je Zeile, z. B. Hintergrund, Schrift oder Eckenradius
+mit einem Wert dahinter. Der JSON-Block hat Vorrang.
+
+## Werte
+
+\`\`\`json
+${JSON.stringify(json, null, 2)}
+\`\`\`
+`;
 }

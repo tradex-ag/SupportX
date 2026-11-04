@@ -29,13 +29,13 @@ function Wordmark({ brand, big }: { brand: Brand; big?: boolean }) {
   return <Tag className={big ? "wordmark big" : "wordmark"}><i className="sq" aria-hidden="true" />{brand.productName.toUpperCase()}</Tag>;
 }
 
-/** Look of the selected workspace (uploaded DESIGN.md), layered over the installation theme. */
-function useWorkspaceTheme(workspaceId: string | null): string | null {
-  const [name, setName] = useState<string | null>(null);
+/** Look of the selected workspace (uploaded DESIGN.md and logo), layered over the installation theme. */
+function useWorkspaceTheme(workspaceId: string | null): { name: string | null; logoUrl: string | null } {
+  const [own, setOwn] = useState<{ name: string | null; logoUrl: string | null }>({ name: null, logoUrl: null });
   useEffect(() => {
     if (!workspaceId) return;
     let alive = true;
-    const load = () => api<{ css: string; productName: string; custom: unknown }>("GET", `/api/w/${workspaceId}/theme`).then((t) => {
+    const load = () => api<{ css: string; productName: string; custom: unknown; logoUrl: string | null }>("GET", `/api/w/${workspaceId}/theme`).then((t) => {
       if (!alive) return;
       let el = document.getElementById("ws-theme");
       if (!el) {
@@ -44,13 +44,13 @@ function useWorkspaceTheme(workspaceId: string | null): string | null {
         document.head.appendChild(el);
       }
       el.textContent = t.css;
-      setName(t.custom ? t.productName : null);
+      setOwn({ name: t.custom ? t.productName : null, logoUrl: t.logoUrl });
     }, () => {});
     void load();
     window.addEventListener("supportx-theme", load);
     return () => { alive = false; window.removeEventListener("supportx-theme", load); };
   }, [workspaceId]);
-  return name;
+  return own;
 }
 
 export function App() {
@@ -73,8 +73,8 @@ export function App() {
     }
   }, []);
   useEffect(() => void load(), [load]);
-  const wsName = useWorkspaceTheme(me ? workspaceId : null);
-  const brand = wsName ? { ...installBrand, productName: wsName } : installBrand;
+  const own = useWorkspaceTheme(me ? workspaceId : null);
+  const brand = { ...installBrand, productName: own.name ?? installBrand.productName, logoUrl: own.logoUrl ?? installBrand.logoUrl };
 
   // Return from the eBay consent: finish it with a same-origin API call (the session
   // cookie is SameSite=strict and is not sent on eBay's redirect itself).

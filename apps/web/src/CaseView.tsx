@@ -5,6 +5,7 @@ import { INTENT_LABEL } from "./Inbox.tsx";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
 import { trackingHref } from "../../../packages/core/tracking.ts";
 import { deadlineState } from "../../../packages/core/deadline.ts";
+import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -19,15 +20,20 @@ interface Draft {
 interface Parcel { id?: string; trackingId?: string; trackingUrl?: string; carrierId?: string; source: string }
 interface Shipment {
   id: string; shipmentNumber?: string; erpStatus?: string; erpStatusAt?: string; shippingDate?: string; deliveryDate?: string;
-  items: Array<{ title?: string; quantity: number }>; parcels: Parcel[];
+  items: Array<{ title?: string; quantity: number }>; parcels: Parcel[]; returnLabels?: number;
 }
 interface OrderSnapshot {
   id: string; orderNumber?: string; orderNumberAtCustomer?: string; orderDate?: string; status?: string; salesChannel?: string;
   lines: Array<{ id: string; title: string; quantity: number; shippedQuantity?: number; returnedQuantity?: number }>;
   shipments: Shipment[];
-  invoices: Array<{ id: string; invoiceNumber?: string; invoiceDate?: string; status?: string; paymentStatus?: string }>;
+  invoices: Array<{ id: string; invoiceNumber?: string; invoiceDate?: string; status?: string; paymentStatus?: string; type?: string }>;
+  returns?: ReturnFact[];
+  returnsError?: string;
   retrievedAt: string;
 }
+
+const TONE_CLASS: Record<ReturnSummary["tone"], string> = { good: "ok", warn: "warn", bad: "bad", neutral: "" };
+const returnsOf = (order: OrderSnapshot) => returnSummary(order);
 interface CaseData {
   linkTargets?: { erp_base_url: string | null; mirakl_base_url: string | null } | null;
   conversation: Rec & { topic: string | null; topic_source: string | null; waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
@@ -163,6 +169,10 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
           <div className="meta small muted">
             <span className="pill platform">{PLATFORM_LABEL[c.source_platform] ?? c.source_platform}</span>
             <span>{c.connection_name}</span>
+            {data.orderLink?.status === "unique" && data.orderLink.snapshot && (() => {
+              const rs = returnsOf(data.orderLink.snapshot);
+              return <span className={`pill ${TONE_CLASS[rs.tone]}`} title={rs.advice}>Retoure: {rs.label}</span>;
+            })()}
             {due && <span className={`deadline ${due.tone}`} title={`${c.reply_hours} Std. ab der ersten unbeantworteten Kundennachricht`}><i aria-hidden="true" />Antwort fällig {fmtDate(due.dueAt.toISOString())}, {due.label}</span>}
           </div>
         </div>
@@ -283,6 +293,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               data={data}
               canEdit={canEdit}
               onLink={(body) => act(() => api("POST", `${base}/cases/${caseId}/order-link`, body), "Zuordnung aktualisiert.")}
+              onRefresh={() => act(() => api<{ changed: boolean }>("POST", `${base}/cases/${caseId}/order-refresh`), (r) => (r as { changed: boolean }).changed ? "Bestellung neu aus weclapp abgerufen. Es hat sich etwas geändert; eine frühere Freigabe ist damit ungültig." : "Bestellung neu aus weclapp abgerufen. Unverändert.")}
               invoiceFiles={(data.caseFiles ?? []).filter((f) => f.source === "erp_invoice")}
               documentBase={`${base}/documents`}
               draft={draft}
@@ -482,8 +493,8 @@ function Outcome({ data, canEdit, onSave }: { data: CaseData; canEdit: boolean; 
   );
 }
 
-function OrderPanel({ data, canEdit, onLink, invoiceFiles, documentBase, draft, replyFiles, onFetchInvoices, onAttach }: {
-  data: CaseData; canEdit: boolean; onLink: (body: { reference?: string; candidateId?: string }) => void;
+function OrderPanel({ data, canEdit, onLink, onRefresh, invoiceFiles, documentBase, draft, replyFiles, onFetchInvoices, onAttach }: {
+  data: CaseData; canEdit: boolean; onLink: (body: { reference?: string; candidateId?: string }) => void; onRefresh: () => Promise<void> | void;
   invoiceFiles: CaseFile[]; documentBase: string; draft: Draft | null; replyFiles: { supported: boolean; note: string };
   onFetchInvoices: () => Promise<void> | void; onAttach: (fileId: string, on: boolean) => void;
 }) {
@@ -517,6 +528,7 @@ function OrderPanel({ data, canEdit, onLink, invoiceFiles, documentBase, draft, 
       {order && (
         <OrderDetails
           order={order}
+          returns={<ReturnBox order={order} canEdit={canEdit} onRefresh={onRefresh} />}
           links={orderLinks({
             order,
             platforms: [c.source_platform, data.accounts.find((a) => a.id === c.merchant_account_id)?.platform],
@@ -527,7 +539,7 @@ function OrderPanel({ data, canEdit, onLink, invoiceFiles, documentBase, draft, 
             <>
           <h4>Rechnungen</h4>
           {order.invoices.length > 0
-            ? <ul>{order.invoices.map((inv) => <li key={inv.id} className="small">{inv.invoiceNumber ?? inv.id} · {fmtDate(inv.invoiceDate)} · {inv.paymentStatus ?? inv.status ?? "–"}</li>)}</ul>
+            ? <ul>{order.invoices.map((inv) => <li key={inv.id} className="small">{inv.type === "CREDIT_NOTE" ? "Gutschrift " : ""}{inv.invoiceNumber ?? inv.id} · {fmtDate(inv.invoiceDate)} · {inv.paymentStatus ?? inv.status ?? "–"}</li>)}</ul>
             : <p className="small muted">Noch keine Rechnung abgerufen.</p>}
           {canEdit && (
             <button disabled={fetching} onClick={async () => { setFetching(true); try { await onFetchInvoices(); } finally { setFetching(false); } }} title="Holt die Rechnungs-PDF dieser Bestellung aus weclapp (nur lesend) und lädt sie herunter.">
@@ -570,7 +582,39 @@ function OrderPanel({ data, canEdit, onLink, invoiceFiles, documentBase, draft, 
   );
 }
 
-function OrderDetails({ order, links, invoices }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode }) {
+/** Has the customer sent the goods back? Shown first, so a refund decision does not need a trip to weclapp. */
+function ReturnBox({ order, canEdit, onRefresh }: { order: OrderSnapshot; canEdit: boolean; onRefresh: () => Promise<void> | void }) {
+  const [busy, setBusy] = useState(false);
+  const rs = returnsOf(order);
+  return (
+    <div className={`return-box ${TONE_CLASS[rs.tone]}`}>
+      <div className="row wrap"><h4>Retoure</h4><span className={`pill ${TONE_CLASS[rs.tone]}`}>{rs.label}</span></div>
+      <p className="small">{rs.advice}</p>
+      {rs.returns.length > 0 && (
+        <ul>
+          {rs.returns.map((r) => (
+            <li key={r.id} className="small">
+              <strong>{r.returnNumber ?? "Retoure"}</strong> · {r.erpStatus ? RETURN_STATUS_DE[r.erpStatus] ?? r.erpStatus : "ohne Status"}{r.erpStatusAt ? ` (${fmtDate(r.erpStatusAt)})` : ""}
+              {r.createdAt && <span className="muted"> · angelegt {fmtDate(r.createdAt)}</span>}
+              {r.items.length > 0 && <div className="muted">{r.items.map((i) => `${i.quantity} × ${i.title ?? "Position"}${i.reason ? ` (Grund: ${i.reason})` : ""}`).join(", ")}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {rs.creditNotes.length > 0 && (
+        <p className="small">Gutschrift: {rs.creditNotes.map((cn) => `${cn.invoiceNumber ?? cn.id}${cn.invoiceDate ? ` vom ${fmtDate(cn.invoiceDate)}` : ""}`).join(", ")}</p>
+      )}
+      <p className="muted small">Stand weclapp {fmtDate(order.retrievedAt)}. Der Status ist eine Buchung in weclapp, kein Scan des Paketdienstes.</p>
+      {canEdit && (
+        <button disabled={busy} onClick={async () => { setBusy(true); try { await onRefresh(); } finally { setBusy(false); } }} title="Liest die Bestellung mit Lieferungen, Rechnungen und Retouren neu aus weclapp (nur lesend).">
+          {busy ? "Ruft ab …" : "Neu aus weclapp abrufen"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function OrderDetails({ order, links, invoices, returns }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode; returns: React.ReactNode }) {
   return (
     <div className="order">
       {links.length > 0 && (
@@ -581,6 +625,7 @@ function OrderDetails({ order, links, invoices }: { order: OrderSnapshot; links:
       <div className="kv"><span>Auftrag</span><strong>{order.orderNumber ?? order.id}</strong></div>
       {order.orderNumberAtCustomer && <div className="kv"><span>Marktplatz-Nr.</span><span>{order.orderNumberAtCustomer}</span></div>}
       <div className="kv"><span>Datum / Status</span><span>{fmtDate(order.orderDate)} · {order.status ?? "–"}</span></div>
+      {returns}
       <h4>Positionen</h4>
       <ul>
         {order.lines.map((l) => <li key={l.id}>{l.quantity} × {l.title} <span className="muted small">(versendet {l.shippedQuantity ?? 0}, retourniert {l.returnedQuantity ?? 0})</span></li>)}

@@ -7,6 +7,7 @@ import type {
   OrderScopeRule,
   ParcelFact,
   ReferenceQuery,
+  ReturnFact,
   ShipmentFact,
 } from "../../core/contracts.ts";
 import { trackingHref } from "../../core/tracking.ts";
@@ -132,10 +133,49 @@ export function mapShipment(shipment: Json, linesById: Map<string, OrderLineFact
       };
     }),
     parcels: mapParcels(shipment),
+    ...(num(shipment.shippingReturnLabelsCount) ? { returnLabels: num(shipment.shippingReturnLabelsCount) } : {}),
   };
 }
 
-export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retrievedAt: string, articles: Json[] = []): OrderRecord {
+/**
+ * A customer return (weclapp incomingGoods of type CUSTOMER_RETURN, created e.g.
+ * via salesOrder/createCustomerReturn). Reason names are resolved from
+ * shipmentReturnReason when available; the free return description is a fallback.
+ */
+export function mapReturn(record: Json, linesById: Map<string, OrderLineFact>, reasonNames: Map<string, string> = new Map()): ReturnFact {
+  const history = arr(record.statusHistory)
+    .map((h) => ({ status: str(h.status) ?? "UNKNOWN", at: isoDate(h.statusDate) }))
+    .sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
+  const status = str(record.status);
+  return {
+    id: String(record.id),
+    returnNumber: str(record.incomingGoodsNumber),
+    erpStatus: status,
+    erpStatusAt: [...history].reverse().find((h) => h.status === status)?.at,
+    createdAt: isoDate(record.createdDate),
+    statusHistory: history,
+    items: arr(record.incomingGoodsItems).map((item) => {
+      const lineId = str(item.salesOrderItemId);
+      const reasonIds = [str(item.returnReasonId), ...arr(item.returnReasons).map((r) => str(r.id))].filter((v): v is string => !!v);
+      const reasons = [...new Set(reasonIds.map((r) => reasonNames.get(r)).filter((v): v is string => !!v))];
+      const reason = reasons.length ? reasons.join(", ") : str(item.returnDescription);
+      return {
+        orderLineId: lineId,
+        title: str(item.title) ?? (lineId ? linesById.get(lineId)?.title : undefined),
+        quantity: num(item.quantity) ?? 0,
+        ...(reason ? { reason } : {}),
+      };
+    }),
+  };
+}
+
+export interface ReturnsRead {
+  records: Json[];
+  reasonNames?: Map<string, string>;
+  error?: string;
+}
+
+export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retrievedAt: string, articles: Json[] = [], returns?: ReturnsRead): OrderRecord {
   const articlesById = new Map(articles.map((a) => [String(a.id), a]));
   const lines: OrderLineFact[] = arr(order.orderItems).map((item, i) => ({
     id: String(item.id ?? `line-${i + 1}`),
@@ -173,6 +213,14 @@ export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retri
       .map((s) => mapShipment(s, linesById))
       .sort((a, b) => (a.shippingDate ?? a.shipmentNumber ?? "").localeCompare(b.shippingDate ?? b.shipmentNumber ?? "")),
     invoices: invoiceFacts,
+    ...(returns
+      ? {
+          returns: returns.records
+            .map((r) => mapReturn(r, linesById, returns.reasonNames))
+            .sort((a, b) => (a.createdAt ?? a.returnNumber ?? "").localeCompare(b.createdAt ?? b.returnNumber ?? "")),
+          ...(returns.error ? { returnsError: returns.error } : {}),
+        }
+      : {}),
     retrievedAt,
   };
 }
@@ -249,7 +297,55 @@ export class WeclappOrderProvider implements OrderProvider {
       if (mine) invoices.set(String(inv.id), inv);
     }
     if (rejected.length) console.warn(`[weclapp] Filter abgelehnt, Daten fehlen evtl. am Auftrag: ${rejected.join(", ")}`);
-    return mapOrder(order, shipments.filter((s) => belongsToOrder(s, id)), [...invoices.values()], new Date().toISOString(), await this.#articles(order));
+    const ownShipments = shipments.filter((s) => belongsToOrder(s, id));
+    const [articles, returns] = await Promise.all([this.#articles(order), this.#returns(order, ownShipments)]);
+    return mapOrder(order, ownShipments, [...invoices.values()], new Date().toISOString(), articles, returns);
+  }
+
+  /**
+   * Customer returns of the order: incomingGoods of type CUSTOMER_RETURN, found via
+   * salesOrders.id and, as a fallback, via the outgoing shipment they refer to.
+   * Every hit is checked again on the record (order, shipment or order line).
+   * Never fails the order lookup: missing rights or a refused filter only set `error`.
+   */
+  async #returns(order: Json, shipments: Json[]): Promise<ReturnsRead> {
+    const id = String(order.id);
+    const lineIds = new Set(arr(order.orderItems).map((item) => str(item.id)).filter((v): v is string => !!v));
+    const shipmentIds = new Set(shipments.map((s) => String(s.id)));
+    const rejected: string[] = [];
+    try {
+      const lists = await Promise.all([
+        this.#tryGet("incomingGoods", { "salesOrders.id-eq": id, pageSize: "50" }, rejected),
+        ...[...shipmentIds].slice(0, 10).map((shipmentId) => this.#tryGet("incomingGoods", { "relatedShipmentId-eq": shipmentId, pageSize: "50" }, rejected)),
+      ]);
+      const found = new Map<string, Json>();
+      for (const row of lists.flat()) {
+        if (str(row.incomingGoodsType) !== "CUSTOMER_RETURN") continue;
+        const mine =
+          arr(row.salesOrders).some((o) => str(o.id) === id) ||
+          shipmentIds.has(str(row.relatedShipmentId) ?? "") ||
+          arr(row.incomingGoodsItems).some((item) => lineIds.has(str(item.salesOrderItemId) ?? ""));
+        if (mine) found.set(String(row.id), row);
+      }
+      const allRefused = rejected.length > 0 && rejected.length >= lists.length;
+      const error = allRefused ? `weclapp lehnt die Abfrage der Retouren ab (${rejected.join(", ")}).` : undefined;
+      return { records: [...found.values()], reasonNames: found.size ? await this.#returnReasons() : new Map(), ...(error ? { error } : {}) };
+    } catch (error) {
+      const detail = error instanceof HttpError && (error.status === 401 || error.status === 403)
+        ? "Der weclapp-Benutzer darf Wareneingänge (Retouren) nicht lesen."
+        : `Retouren konnten nicht gelesen werden: ${(error as Error).message}`;
+      return { records: [], error: detail };
+    }
+  }
+
+  /** Names of the return reasons configured in weclapp. Best effort: a failure only drops the names. */
+  async #returnReasons(): Promise<Map<string, string>> {
+    try {
+      const rows = await this.#get("shipmentReturnReason", { pageSize: "200" });
+      return new Map(rows.map((r) => [String(r.id), str(r.name) ?? ""]).filter(([, name]) => !!name) as Array<[string, string]>);
+    } catch {
+      return new Map();
+    }
   }
 
   /** Linked articles, for comparing the order title with the ERP article. Best effort: a failure only drops the comparison. */

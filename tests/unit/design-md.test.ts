@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkTheme, contrast, readDesignMd } from "../../packages/core/design-md.ts";
+import { checkTheme, COLOR_FIELDS, contrast, readDesignMd, writeDesignMd, type FullDesign } from "../../packages/core/design-md.ts";
+import { DEFAULT_THEME } from "../../packages/core/theme.ts";
+import { logoType } from "../../packages/services/design.ts";
 
 const SAMPLE = `# Design-Basis
 
@@ -66,5 +68,54 @@ describe("readDesignMd", () => {
     assert.throws(() => checkTheme({ colors: { text: "red;}body{display:none" }, fonts: {} }));
     assert.throws(() => checkTheme({ colors: {}, fonts: { sans: "X;}body{display:none" } }));
     assert.equal(Math.round(contrast("#ffffff", "#000000")), 21);
+  });
+});
+
+describe("DESIGN.md formats and export", () => {
+  it("reads token-style files with front matter (on-surface is text, fontFamily, rounded)", () => {
+    const r = readDesignMd(`---
+name: Beispiel
+colors:
+  primary: "#1a4d8f"
+  on-primary: "#ffffff"
+  surface: "#ffffff"
+  on-surface: "#1b1b1f"
+  background: "#f5f7fa"
+typography:
+  body:
+    fontFamily: Inter
+    fontSize: 16px
+rounded:
+  md: 8px
+---
+# Beispiel`);
+    assert.equal(r.theme.colors.primary, "#1a4d8f");
+    assert.equal(r.theme.colors.primaryText, "#ffffff");
+    assert.equal(r.theme.colors.surface, "#ffffff", "on-surface does not overwrite the surface");
+    assert.equal(r.theme.colors.text, "#1b1b1f");
+    assert.equal(r.theme.colors.background, "#f5f7fa");
+    assert.match(r.theme.fonts.sans ?? "", /^"Inter"/);
+    assert.equal(r.theme.radius, 8);
+  });
+
+  it("writes a template that reads back to exactly the same values", () => {
+    const { soft: _soft, ...colors } = DEFAULT_THEME.colors;
+    const design: FullDesign = { productName: "Mein Support", colors, fonts: { sans: DEFAULT_THEME.fonts.sans, mono: DEFAULT_THEME.fonts.mono }, radius: 6 };
+    const text = writeDesignMd(design, { custom: false });
+    assert.match(text, /Vorlage/);
+    const r = readDesignMd(text);
+    assert.deepEqual(r.warnings, []);
+    assert.equal(r.theme.productName, "Mein Support");
+    for (const f of COLOR_FIELDS) assert.equal(r.theme.colors[f], colors[f], f);
+    assert.equal(r.theme.fonts.sans, design.fonts.sans);
+    assert.equal(r.theme.fonts.mono, design.fonts.mono);
+    assert.equal(r.theme.radius, 6);
+  });
+
+  it("recognises logos by their first bytes and refuses SVG", () => {
+    assert.equal(logoType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0])), "image/png");
+    assert.equal(logoType(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), "image/jpeg");
+    assert.equal(logoType(Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBPVP8 ")])), "image/webp");
+    assert.equal(logoType(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')), null);
   });
 });
