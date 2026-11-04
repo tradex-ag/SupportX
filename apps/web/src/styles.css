@@ -104,6 +104,9 @@ pre.body.folded { max-height: 15em; overflow: hidden; -webkit-mask-image: linear
 .kv > span:first-child { color: var(--muted); }
 .kv > * { min-width: 0; overflow-wrap: anywhere; }
 .shipment { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; margin-bottom: 6px; }
+.return-box { border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius); padding: 6px 10px; margin: 8px 0; }
+.return-box h4 { margin: 0; } .return-box p { margin: 4px 0; } .return-box ul { margin: 4px 0; padding-left: 18px; }
+.return-box.ok { border-left-color: var(--ok); } .return-box.warn { border-left-color: var(--warn); } .return-box.bad { border-left-color: var(--bad); }
 .order ul, .history { margin: 4px 0; padding-left: 18px; }
 .draft textarea { margin: 8px 0; font-family: inherit; line-height: 1.45; }
 .issues { padding-left: 18px; }

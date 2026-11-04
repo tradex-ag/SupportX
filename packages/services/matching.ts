@@ -145,6 +145,41 @@ export async function linkOrderManually(ctx: AppContext, actor: Actor, conversat
   return enrichConversation(ctx, actor.workspaceId, conversationId, { manualReference: input.reference, actor });
 }
 
+/**
+ * Staff action: read the linked order again from weclapp (e.g. to see a return
+ * created after the case came in). Keeps the link; when nothing but the
+ * retrieval time changed, approvals stay valid.
+ */
+export async function refreshOrderLink(ctx: AppContext, actor: Actor, conversationId: string): Promise<{ status: MatchStatus; changed: boolean }> {
+  requireRole(actor, ["owner", "agent"]);
+  const conv = await one<ConvRow>(ctx.db, "SELECT id, workspace_id, merchant_account_id, order_references FROM conversations WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, conversationId]);
+  if (!conv) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+  const link = await one<{ id: string; external_order_id: string | null; references_tried: string[]; matched_by: string | null; linked_by: "auto" | "user"; linked_by_user_id: string | null; snapshot: OrderRecord | null }>(
+    ctx.db, "SELECT id, external_order_id, references_tried, matched_by, linked_by, linked_by_user_id, snapshot FROM order_links WHERE workspace_id = $1 AND conversation_id = $2 AND is_current", [actor.workspaceId, conversationId],
+  );
+  if (!link?.external_order_id) throw new ServiceError(409, "NO_ORDER", "Dem Fall ist keine Bestellung zugeordnet.");
+  const erp = await loadErpConnection(ctx.db, actor.workspaceId);
+  if (!erp) throw new ServiceError(409, "NO_ERP", "Keine weclapp-Verbindung konfiguriert.");
+  const result = await (await orderProviderFor(ctx, ctx.db, erp)).getOrder(link.external_order_id, ALL_ORDERS);
+  if (result.status === "error") throw new ServiceError(502, "ERP_ERROR", `weclapp: ${result.error}`);
+  if (result.status !== "unique") throw new ServiceError(409, "ORDER_GONE", "Die Bestellung ist in weclapp nicht mehr zu finden. Bitte neu zuordnen.");
+  // jsonb does not keep key order, so compare a canonical form (sorted keys, without the retrieval time).
+  const canonical = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(canonical) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => [k, canonical(x)])) : v;
+  const strip = (o: OrderRecord | null) => (o ? JSON.stringify(canonical({ ...o, retrievedAt: undefined })) : null);
+  const changed = strip(link.snapshot) !== strip(result.order);
+  await withTx(ctx.db, async (tx) => {
+    if (changed) {
+      const keep: OrderLookupResult = { ...result, matchedBy: link.matched_by ?? result.matchedBy };
+      await storeLink(tx, conv, "unique", keep, link.references_tried, link.linked_by, link.linked_by_user_id);
+    } else {
+      await tx.query("UPDATE order_links SET snapshot = $3, retrieved_at = $4 WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, link.id, JSON.stringify(result.order), result.order.retrievedAt]);
+    }
+    await audit(tx, actor, "order.refreshed", "conversation", conversationId, { changed });
+  });
+  return { status: "unique", changed };
+}
+
 export async function setConversationAccount(ctx: AppContext, actor: Actor, conversationId: string, merchantAccountId: string): Promise<void> {
   requireRole(actor, ["owner", "agent"]);
   await withTx(ctx.db, async (tx) => {

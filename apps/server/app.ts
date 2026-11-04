@@ -37,7 +37,7 @@ import { EBAY_DELETION_PATH, ebayChallengeResponse } from "../../packages/connec
 import { handleEbayAccountDeletion } from "../../packages/services/ebay-account-deletion.ts";
 import { ServiceError, type Actor, type AppContext } from "../../packages/services/context.ts";
 import { enqueue } from "../../packages/services/jobs.ts";
-import { linkOrderManually, setConversationAccount } from "../../packages/services/matching.ts";
+import { linkOrderManually, refreshOrderLink, setConversationAccount } from "../../packages/services/matching.ts";
 import { getMessageAttachment, listMessageAttachments } from "../../packages/services/attachments.ts";
 import { attachUploadedFile, deleteDocument, getDocument, listDocuments, setDraftDocuments, uploadDocument } from "../../packages/services/documents.ts";
 import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
@@ -269,6 +269,8 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     const body = parse(z.object({ reference: z.string().max(60).optional(), candidateId: z.string().max(60).optional() }), req.body);
     return { status: await linkOrderManually(ctx, await actor(req), (req.params as { id: string }).id, body) };
   });
+  // Read the linked order again from weclapp (GET only), e.g. to see a return created later.
+  app.post("/api/w/:ws/cases/:id/order-refresh", async (req) => refreshOrderLink(ctx, await actor(req), (req.params as { id: string }).id));
   app.post("/api/w/:ws/cases/:id/redraft", async (req) => {
     const body = parse(z.object({ decision: z.enum(["customer_right", "customer_wrong", "ask_customer"]) }), req.body);
     await requestRedraft(ctx, await actor(req), (req.params as { id: string }).id, body.decision);

@@ -195,7 +195,12 @@ export interface ShipmentFact {
   deliveryDate?: string;
   items: ReadonlyArray<{ orderLineId?: string; title?: string; quantity: number }>;
   parcels: ReadonlyArray<ParcelFact>;
+  /** Return labels weclapp created for this shipment (shippingReturnLabelsCount). A label alone is no return. */
+  returnLabels?: number;
 }
+
+export type { ReturnFact } from "./returns.ts";
+import type { ReturnFact } from "./returns.ts";
 
 export interface InvoiceFact {
   id: string;
@@ -221,6 +226,13 @@ export interface OrderRecord {
   lines: ReadonlyArray<OrderLineFact>;
   shipments: ReadonlyArray<ShipmentFact>;
   invoices: ReadonlyArray<InvoiceFact>;
+  /**
+   * Customer returns of this order. Undefined in snapshots taken before returns
+   * were read (shown as "nicht geprüft"); an empty list means none was found.
+   */
+  returns?: ReadonlyArray<ReturnFact>;
+  /** Reading the returns failed or was refused by the tenant; the list may be incomplete. */
+  returnsError?: string;
   /** When this application fetched the record. Event times are kept per fact. */
   retrievedAt: string;
 }

@@ -18,8 +18,8 @@ export const DEMO = {
   channels: { amazon: "GROSS2", docmorris: "GROSS3", shopify: "GROSS4", ebay: "GROSS5" },
 };
 
-const item = (id: string, pos: number, title: string, quantity: number, shipped: number) => ({
-  id, positionNumber: pos, title, articleId: `ART-${id}`, quantity: String(quantity), shippedQuantity: String(shipped), returnedQuantity: "0",
+const item = (id: string, pos: number, title: string, quantity: number, shipped: number, returned = 0) => ({
+  id, positionNumber: pos, title, articleId: `ART-${id}`, quantity: String(quantity), shippedQuantity: String(shipped), returnedQuantity: String(returned),
 });
 
 export function demoWeclappData(): FakeWeclappData {
@@ -33,7 +33,7 @@ export function demoWeclappData(): FakeWeclappData {
       {
         id: "so-dm-1", orderNumber: "AU-10002", orderNumberAtCustomer: "DM-2026-000123", orderDate: day("2026-10-12"), status: "CLOSED",
         salesChannel: DEMO.channels.docmorris, customerId: "cust-dm", tags: [],
-        orderItems: [item("soi-3", 1, "Demo-Pflegecreme 50 ml", 2, 2)],
+        orderItems: [item("soi-3", 1, "Demo-Pflegecreme 50 ml", 2, 2, 1)],
       },
       {
         id: "so-shop-1", orderNumber: "AU-10003", orderNumberAtCustomer: "1001", orderDate: day("2026-10-15"), status: "ORDER_CONFIRMATION_PRINTED",
@@ -105,6 +105,23 @@ export function demoWeclappData(): FakeWeclappData {
         shipmentItems: [{ salesOrderItemId: "soi-6", quantity: "1" }], parcels: [{ id: "pc-5", trackingId: "DEMO00099999", trackingUrl: "https://tracking.demo.invalid/DEMO00099999" }],
       },
     ],
+    // Customer returns (weclapp incomingGoods of type CUSTOMER_RETURN): one booked in, one only created, one other goods receipt.
+    incomingGoods: [
+      {
+        id: "ig-1", incomingGoodsNumber: "WE-7001", incomingGoodsType: "CUSTOMER_RETURN", status: "INCOMING_MOVED_INTO_STORE", createdDate: day("2026-10-20"),
+        salesOrders: [{ id: "so-dm-1" }], relatedShipmentId: "sh-3",
+        statusHistory: [{ status: "NEW", statusDate: day("2026-10-20") }, { status: "INCOMING_MOVED_INTO_STORE", statusDate: day("2026-10-23") }],
+        incomingGoodsItems: [{ salesOrderItemId: "soi-3", title: "Demo-Pflegecreme 50 ml", quantity: "1", returnReasonId: "rr-1" }],
+      },
+      {
+        // Linked only through the outgoing shipment (no salesOrders on the record).
+        id: "ig-2", incomingGoodsNumber: "WE-7002", incomingGoodsType: "CUSTOMER_RETURN", status: "NEW", createdDate: day("2026-10-19"),
+        relatedShipmentId: "sh-5", statusHistory: [{ status: "NEW", statusDate: day("2026-10-19") }],
+        incomingGoodsItems: [{ salesOrderItemId: "soi-6", quantity: "1", returnDescription: "Farbe gefällt nicht" }],
+      },
+      { id: "ig-3", incomingGoodsNumber: "WE-7003", incomingGoodsType: "STANDARD", status: "INCOMING_MOVED_INTO_STORE", salesOrders: [{ id: "so-amz-1" }], incomingGoodsItems: [] },
+    ],
+    shipmentReturnReason: [{ id: "rr-1", name: "Ware beschädigt" }],
     salesInvoice: [
       { id: "inv-1", invoiceNumber: "RE-9001", invoiceDate: day("2026-10-15"), status: "OPEN_ITEM_CREATED", paymentStatus: "PAID", salesInvoiceType: "STANDARD_INVOICE", salesOrderId: "so-amz-1", salesOrders: [{ id: "so-amz-1" }] },
       { id: "inv-2", invoiceNumber: "RE-9002", invoiceDate: day("2026-10-13"), status: "OPEN_ITEM_CREATED", paymentStatus: "PAID", salesOrderId: "so-dm-1" },

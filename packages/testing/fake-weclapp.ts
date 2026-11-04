@@ -12,6 +12,9 @@ export interface FakeWeclappData {
   shipment: Array<Record<string, unknown>>;
   salesInvoice: Array<Record<string, unknown>>;
   article?: Array<Record<string, unknown>>;
+  /** Goods receipts; customer returns have incomingGoodsType CUSTOMER_RETURN. */
+  incomingGoods?: Array<Record<string, unknown>>;
+  shipmentReturnReason?: Array<Record<string, unknown>>;
 }
 
 export interface FakeWeclapp {
@@ -31,7 +34,7 @@ function values(record: unknown, path: string[]): unknown[] {
 }
 
 /** `rejectFilters` (e.g. "salesInvoice.salesOrderId-eq") answer HTTP 400 like a tenant that does not know the filter. */
-export async function startFakeWeclapp(data: FakeWeclappData, opts: { token: string; port?: number; rejectFilters?: ReadonlyArray<string> }): Promise<FakeWeclapp> {
+export async function startFakeWeclapp(data: FakeWeclappData, opts: { token: string; port?: number; rejectFilters?: ReadonlyArray<string>; forbidden?: ReadonlyArray<string> }): Promise<FakeWeclapp> {
   const requests: string[] = [];
   let failStatus: number | null = null;
   const server: Server = createServer((req, res) => {
@@ -56,8 +59,10 @@ export async function startFakeWeclapp(data: FakeWeclappData, opts: { token: str
       res.writeHead(200, { "Content-Type": "application/pdf" });
       return res.end(Buffer.from(`%PDF-1.4\n% Rechnung ${String(inv.invoiceNumber)}\n%%EOF`));
     }
-    const match = /^\/webapp\/api\/v2\/(salesOrder|shipment|salesInvoice|article)$/.exec(url.pathname);
+    const match = /^\/webapp\/api\/v2\/(salesOrder|shipment|salesInvoice|article|incomingGoods|shipmentReturnReason)$/.exec(url.pathname);
     if (!match) return send(404, { error: "not found" });
+    // A user without the right for this resource (e.g. no access to goods receipts).
+    if (opts.forbidden?.includes(match[1]!)) return send(403, { error: "forbidden" });
     for (const key of url.searchParams.keys()) {
       if (opts.rejectFilters?.includes(`${match[1]}.${key}`)) return send(400, { error: "unexpected filter property" });
     }

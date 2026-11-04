@@ -1,5 +1,6 @@
 import { trackingHref } from "./tracking.ts";
 import type { AllowedFact, OrderRecord, ShipmentFact } from "./contracts.ts";
+import { RETURN_STATUS_DE, receivedAt } from "./returns.ts";
 
 const SHIPMENT_STATUS_DE: Readonly<Record<string, string>> = {
   NEW: "angelegt, noch nicht als versendet gebucht",
@@ -71,10 +72,24 @@ export function buildOrderFacts(order: OrderRecord): AllowedFact[] {
       });
     });
   });
+  if (order.returns && !order.returnsError && order.returns.length === 0) {
+    facts.push({ id: "returns.none", text: "Zu dieser Bestellung ist im ERP keine Retoure angelegt.", source, observedAt });
+  }
+  order.returns?.forEach((ret, i) => {
+    const status = ret.erpStatus ? RETURN_STATUS_DE[ret.erpStatus] ?? ret.erpStatus : "ohne Status";
+    const at = receivedAt(ret) ?? ret.erpStatusAt;
+    const items = ret.items.length ? ` Enthält: ${ret.items.map((it) => `${it.quantity} × ${it.title ?? "Position"}`).join(", ")}.` : "";
+    facts.push({
+      id: `return.${i + 1}`,
+      text: `Retoure ${ret.returnNumber ?? i + 1}: im ERP ${status}${at ? ` (Statusdatum ${day(at)})` : ""}.${items} Dies ist eine ERP-Buchung; eine Erstattung ist damit nicht ausgeführt.`,
+      source,
+      observedAt,
+    });
+  });
   order.invoices.forEach((invoice, i) => {
     facts.push({
       id: `invoice.${i + 1}`,
-      text: `Rechnung ${invoice.invoiceNumber ?? invoice.id} vom ${day(invoice.invoiceDate)}, Status: ${invoice.status ?? "unbekannt"}.`,
+      text: `${invoice.type === "CREDIT_NOTE" ? "Gutschrift" : "Rechnung"} ${invoice.invoiceNumber ?? invoice.id} vom ${day(invoice.invoiceDate)}, Status: ${invoice.status ?? "unbekannt"}.`,
       source,
       observedAt,
     });
