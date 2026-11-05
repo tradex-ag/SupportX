@@ -213,7 +213,7 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
           </tbody>
         </table>
       </details>
-      <p className="small muted credit">SupportX ist Open Source (MIT), ein Produkt von <a href="https://aseio.app" target="_blank" rel="noopener">ASEIO</a> · TradeX International AG</p>
+      <p className="small muted credit">SupportX ist Open Source (<a href="https://github.com/tradex-ag/SupportX" target="_blank" rel="noopener">AGPL-3.0, Quellcode</a>), ein Produkt von <a href="https://aseio.app" target="_blank" rel="noopener">ASEIO</a> · TradeX International AG, Lars Orlamünde</p>
     </div></div>
   );
 }

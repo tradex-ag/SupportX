@@ -1,0 +1,31 @@
+SupportX
+Copyright (C) 2026 TradeX International AG
+Author: Lars Orlamünde
+
+An open-source product of ASEIO (https://aseio.app).
+Original source: https://github.com/tradex-ag/SupportX
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License (AGPL-3.0-only).
+It is distributed WITHOUT ANY WARRANTY; see the LICENSE file for details.
+
+Additional term under section 7(b) of the GNU AGPL v3.0
+(preservation of author attributions):
+
+  Every copy and every modified version of this program, in source or
+  object form and when made available to users over a network, must
+  keep this NOTICE file and the copyright notices, and must keep a
+  reasonably visible attribution in its user interface that reads, or
+  is equivalent to:
+
+    "Based on SupportX, an open-source product of ASEIO -
+     TradeX International AG, Lars Orlamünde"
+
+  together with a link to the corresponding source code. Modified
+  versions must be marked as changed and must not be presented as the
+  original SupportX.
+
+The names "SupportX" and "ASEIO" and their logos are not licensed under
+the AGPL; they remain with TradeX International AG (section 7(e)).
+Versions up to and including 0.9.1 were published under the MIT License.

@@ -16,6 +16,10 @@ Tests should cover account isolation, pagination, duplicate ingress, message rou
 
 Return the common structured proposal contract. Do not introduce a provider-specific bypass of authorization, evidence validation or approval. Model configuration, credentials, telemetry and cost controls belong to the operator's workspace. A model provider must not become an implicit dependency of all connectors.
 
-## Licensing
+## Licensing and how to give changes back
 
-Submit only material you are entitled to license under the repository's MIT terms. Preserve upstream license notices where applicable. Review dependency licenses before introducing them. Do not copy marketplace documentation, platform SDKs or proprietary application modules into the repository without checking their respective licenses.
+SupportX is licensed under AGPL-3.0-only with the attribution term in [NOTICE](NOTICE). If you run a modified SupportX for others or distribute it, you must publish your source under the same license. Please do not stop there: open a pull request against https://github.com/tradex-ag/SupportX so the improvement reaches everyone.
+
+By opening a pull request you confirm that you wrote the contribution or are otherwise entitled to submit it, that it is licensed under AGPL-3.0-only, and that you grant TradeX International AG a perpetual, worldwide, non-exclusive, royalty-free right to use, change, sublicense and relicense the contribution, including under other license terms. You keep your own copyright. Add a `Signed-off-by:` line to each commit (`git commit -s`, Developer Certificate of Origin, https://developercertificate.org/) to state this.
+
+Submit only material you are entitled to license under these terms. Preserve upstream license notices where applicable. Review dependency licenses before introducing them. Do not copy marketplace documentation, platform SDKs or proprietary application modules into the repository without checking their respective licenses.

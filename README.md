@@ -1,6 +1,6 @@
 # SupportX
 
-A self-hosted support inbox for marketplace sellers: Microsoft 365 mail in, order context from weclapp, AI-drafted replies, human review. MIT-licensed.
+A self-hosted support inbox for marketplace sellers: Microsoft 365 mail in, order context from weclapp, AI-drafted replies, human review. Licensed under AGPL-3.0.
 
 **An open-source product of [ASEIO](https://aseio.app)**, owned by TradeX International AG.
 
@@ -82,4 +82,12 @@ weclapp is the only order-data source; there are no order imports from Shopify, 
 
 ## License and self-hosting
 
-MIT, see [LICENSE](LICENSE). Copyright TradeX International AG. The names „SupportX“ and „ASEIO“ and their logos are not covered by the license; forks please use their own name. Operators bring their own Microsoft tenant, weclapp account, AI provider key and hosting. The license does not grant platform access or waive platform terms. No proprietary application code or real customer records are included; demo data uses reserved `.invalid` domains.
+GNU Affero General Public License v3.0 (AGPL-3.0-only), see [LICENSE](LICENSE), with the attribution term in [NOTICE](NOTICE). Copyright TradeX International AG, author Lars Orlamünde.
+
+In short: anyone may use, change, run commercially and redistribute SupportX. In return:
+
+- **Keep the attribution.** Every copy and every derived version keeps the copyright notice, the NOTICE file and the visible credit line in the user interface naming SupportX, ASEIO, TradeX International AG and Lars Orlamünde (AGPL section 7(b)).
+- **Share your changes.** Whoever distributes a modified version, or lets other people use it over a network (for example a hosted support inbox), must offer them the complete source code of that version under the same license (AGPL section 13). Mark your changes.
+- **Please send them back.** We ask that improvements come back as a pull request to [tradex-ag/SupportX](https://github.com/tradex-ag/SupportX), see [CONTRIBUTING.md](CONTRIBUTING.md). The license requires publishing changes, not sending them to us; the pull request is the way to get them into the original.
+
+Versions up to and including 0.9.1 were published under MIT; copies obtained under MIT keep those terms. The names „SupportX“ and „ASEIO“ and their logos are not covered by the license; forks please use their own name. Operators bring their own Microsoft tenant, weclapp account, AI provider key and hosting. The license does not grant platform access or waive platform terms. No proprietary application code or real customer records are included; demo data uses reserved `.invalid` domains.

@@ -113,7 +113,7 @@ Implementation note (2026-10-21): the official specification URL was not reachab
 
 | ID | Source | Evidence used |
 | --- | --- | --- |
-| OS-1 | [MIT License](https://choosealicense.com/licenses/mit/) | Permissive reuse, commercial use and preservation of copyright/license notices. |
+| OS-1 | [GNU AGPL v3.0](https://choosealicense.com/licenses/agpl-3.0/) | Reuse and commercial use allowed; modified versions offered over a network must provide their source under the same license (section 13); section 7(b) allows requiring author attributions. |
 
 ## Updating this research
 

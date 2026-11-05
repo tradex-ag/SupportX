@@ -147,9 +147,9 @@ URL und Token werden vom Betreiber für seine Verbindung hinterlegt und serverse
 
 **Meilenstein 6 – reproduzierbare öffentliche Veröffentlichung:** Installationsweg, Migrationen, Backup/Wiederherstellung, CI, Lizenzhinweise, Beispieldaten und Betriebshinweise. Repositoryname, Eigentümer und Copyright-Angabe vor Veröffentlichung festlegen. Das Detailbacklog steht in [ROADMAP.md](ROADMAP.md).
 
-## 11. MIT und Betrieb durch andere Händler
+## 11. Lizenz (AGPL-3.0) und Betrieb durch andere Händler
 
-MIT entspricht dem Ziel, dass andere das Projekt verwenden, ändern, weitergeben und kommerziell einsetzen können. Erweiterungen müssen unter MIT nicht wieder öffentlich werden. Lizenz- und Urheberhinweise bleiben erforderlich. [OS-1]
+Seit 04.11.2026 (Lars) steht SupportX unter AGPL-3.0-only, vorher MIT (bis 0.9.1). Andere dürfen das Projekt verwenden, ändern, weitergeben und kommerziell einsetzen. Wer eine geänderte Fassung weitergibt oder anderen über das Netz anbietet, muss ihren vollständigen Quellcode unter derselben Lizenz offenlegen (AGPL § 13). Urheberhinweis, `NOTICE` und die sichtbare Nennung von SupportX, ASEIO, TradeX International AG und Lars Orlamünde in der Oberfläche bleiben Pflicht (AGPL § 7 b). Rückgabe ans Original-Repository ist erwünscht (Pull Request, siehe CONTRIBUTING.md), lässt sich aber nicht erzwingen. [OS-1]
 
 Jede Installation bringt eigene Plattformzugänge und Schlüssel mit. Öffentlich verfügbarer Quellcode ersetzt keine Amazon-App-Registrierung, kein Kaufland-Partnerverfahren und keine Microsoft-Berechtigung. Ein späterer gemeinsamer Hostingdienst für fremde Händler ist ein eigenes Betriebsmodell mit zusätzlichen Anforderungen.
 
