@@ -98,7 +98,7 @@ describe("forward a mail from a case", () => {
     const sent = h.graph.forwards[0]!;
     assert.equal(sent.kind, "sendMail", "a new mail, not the original with the relay sender");
     assert.equal(sent.subject, "Fwd: Frage zur Bestellung 302-0000000-0000000");
-    assert.doesNotMatch(sent.body, new RegExp(DEMO.amazonRelayDomain.replace(/\./g, "\\.")));
+    assert.ok(!sent.body.includes(DEMO.amazonRelayDomain), "no relay address in the forwarded text");
     assert.match(sent.body, /Die Dose ist falsch/);
     assert.deepEqual(sent.attachments.map((a) => a.name), ["foto.pdf"]);
   });
