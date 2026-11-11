@@ -43,6 +43,7 @@ import { attachUploadedFile, deleteDocument, getDocument, listDocuments, setDraf
 import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/invoices.ts";
 import { deleteLogo, getLogo, logoVersion, previewDesign, resetDesign, saveDesign, saveLogo, workspaceTheme } from "../../packages/services/design.ts";
 import { writeDesignMd, type WorkspaceTheme } from "../../packages/core/design-md.ts";
+import { checkAmazonListingConnection, closeAmazonOffer, deleteAmazonListingConnection, getAmazonListingSettings, lookupAmazonListing, saveAmazonListingConnection } from "../../packages/services/amazon-listings.ts";
 import { approveAndSendMany, batchCandidates } from "../../packages/services/batch.ts";
 import { supportReport } from "../../packages/services/reports.ts";
 import { evidencePdf } from "../../packages/services/evidence.ts";
@@ -271,6 +272,16 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   });
   // Read the linked order again from weclapp (GET only), e.g. to see a return created later.
   app.post("/api/w/:ws/cases/:id/order-refresh", async (req) => refreshOrderLink(ctx, await actor(req), (req.params as { id: string }).id));
+  // Amazon offer from the case: read first (changes nothing), then close only with the dialog's confirmation.
+  const listingTarget = { sku: z.string().min(1).max(200), marketplaceId: z.string().min(5).max(20) };
+  app.post("/api/w/:ws/cases/:id/amazon-listing/lookup", async (req) => {
+    const body = parse(z.object(listingTarget), req.body);
+    return lookupAmazonListing(ctx, await actor(req), (req.params as { id: string }).id, body);
+  });
+  app.post("/api/w/:ws/cases/:id/amazon-listing/close", async (req) => {
+    const body = parse(z.object({ ...listingTarget, confirm: z.literal(true), expectedAsin: z.string().max(20).optional() }), req.body);
+    return closeAmazonOffer(ctx, await actor(req), (req.params as { id: string }).id, body);
+  });
   app.post("/api/w/:ws/cases/:id/redraft", async (req) => {
     const body = parse(z.object({ decision: z.enum(["customer_right", "customer_wrong", "ask_customer"]) }), req.body);
     await requestRedraft(ctx, await actor(req), (req.params as { id: string }).id, body.decision);
@@ -379,6 +390,25 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     const body = parse(z.object({ name: z.string().max(120), platform: z.string(), orderScopeField: z.string(), orderScopeValue: z.string().max(200).default("") }), req.body);
     return { id: await createMerchantAccount(ctx, await actor(req), body) };
   });
+  // Amazon Selling Partner API access (owner). Secrets are never returned; identifiers only masked.
+  app.get("/api/w/:ws/amazon-listings", async (req) => getAmazonListingSettings(ctx, await actor(req)));
+  app.put("/api/w/:ws/amazon-listings", async (req) => {
+    const body = parse(
+      z.object({
+        region: z.enum(["eu", "na", "fe"]).optional(), marketplaceIds: z.array(z.string().max(20)).min(1).max(20).optional(),
+        sellerId: z.string().max(40).optional(), clientId: z.string().max(200).optional(), clientSecret: z.string().max(500).optional(), refreshToken: z.string().max(2000).optional(),
+        apiBaseUrl: z.string().max(300).optional(), tokenUrl: z.string().max(300).optional(),
+      }),
+      req.body,
+    );
+    await saveAmazonListingConnection(ctx, await actor(req), body);
+    return { ok: true };
+  });
+  app.delete("/api/w/:ws/amazon-listings", async (req) => {
+    await deleteAmazonListingConnection(ctx, await actor(req));
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/amazon-listings/check", async (req) => checkAmazonListingConnection(ctx, await actor(req)));
   app.put("/api/w/:ws/erp", async (req) => {
     const body = parse(z.object({ baseUrl: z.string().max(300), apiToken: z.string().max(500).optional(), searchFields: z.array(z.string()).max(5).optional() }), req.body);
     return { id: await upsertWeclappConnection(ctx, await actor(req), body) };

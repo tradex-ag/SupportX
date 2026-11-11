@@ -1,3 +1,4 @@
+import { caseAmazonListingAccess, listCaseListingActions } from "./amazon-listings.ts";
 import { CONNECTOR_CATALOG } from "../connectors/catalog.ts";
 import { customerText } from "../core/customer-text.ts";
 import { many, one, withTx } from "../storage/db.ts";
@@ -164,7 +165,8 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const replyFiles = REPLY_FILES[(conversation as { connection_kind: ChannelKind }).connection_kind] ?? { supported: false, note: "" };
   const caseFiles = await listCaseFiles(ctx, actor, conversationId);
   const invoices = invoiceSummary(link?.status === "unique" ? link.snapshot : null);
-  return { conversation, messages, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices };
+  const [listingActions, amazonListings] = await Promise.all([listCaseListingActions(ctx.db, ws, conversationId), caseAmazonListingAccess(ctx.db, ws)]);
+  return { conversation, messages, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings };
 }
 
 /**

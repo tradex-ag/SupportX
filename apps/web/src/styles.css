@@ -281,3 +281,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1
 .design-live { border-left: 3px solid var(--signal); padding: 6px 10px; background: var(--bg); }
 .design-logo { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
 .logo-preview { max-height: 48px; max-width: 240px; object-fit: contain; display: block; margin-bottom: 8px; }
+/* Our own actions at a marketplace, shown in the case history. */
+.msg.action { border-left: 3px solid var(--warn); background: var(--bg); }
+.confirm-dialog { border: 1px solid var(--text); border-radius: var(--radius); padding: 18px; max-width: 460px; background: var(--card); color: var(--text); }
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.confirm-dialog h3 { margin-top: 0; }
