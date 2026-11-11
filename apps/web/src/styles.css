@@ -95,6 +95,13 @@ label.row { flex-direction: row; align-items: center; }
 .msg { border-left: 3px solid var(--line); padding: 6px 10px; margin-bottom: 10px; }
 .msg.inbound { border-color: var(--text); } .msg.outbound { border-color: var(--ok); }
 .msg .row { justify-content: space-between; }
+/* History as a chat: customer on the left, our replies indented to the right on a tinted card. */
+.chat { display: flex; flex-direction: column; }
+.msg.outbound { margin-left: 15%; border-left: 0; border-right: 3px solid var(--ok); background: var(--ok-bg); border-radius: var(--radius); }
+.msg.outbound.state-planned, .msg.outbound.state-dispatching { border-right-style: dashed; background: var(--bg); }
+.msg.outbound.state-delivery_uncertain, .msg.outbound.state-failed { border-right-color: var(--bad); background: var(--bad-bg); }
+.msg.reply .row.wrap { justify-content: flex-start; gap: 8px; margin: 2px 0; }
+@media (max-width: 640px) { .msg.outbound { margin-left: 8%; } }
 pre.body { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-family: inherit; margin: 6px 0 0; }
 pre.body.folded { max-height: 15em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
 .concern { border-color: var(--text); }
@@ -115,8 +122,6 @@ pre.body.folded { max-height: 15em; overflow: hidden; -webkit-mask-image: linear
 .send-blocked ul { margin: 4px 0 0; padding-left: 18px; }
 .card > h3:first-child, .card > .row:first-child > h3 { margin-bottom: 12px; }
 .card { padding: 16px; }
-.outbox { margin-top: 12px; border-top: 1px solid var(--line); }
-.outbox-row { padding: 4px 0; }
 .note { border-bottom: 1px solid var(--line); padding: 6px 0; }
 .settings { padding: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; overflow-y: auto; }
 .settings .wide { grid-column: 1 / -1; }
