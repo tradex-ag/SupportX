@@ -292,3 +292,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1
 .subject-rule input { width: 100%; font-family: var(--mono); font-size: 13px; }
 .subject-rule ul { margin: 4px 0 0; padding-left: 18px; }
 .subject-rule p { margin: 0; }
+/* Forward one mail of a case */
+.forward-log { margin-top: 8px; padding: 6px 8px; border: 1px dashed var(--line); border-radius: var(--radius); }
+.forward-log p { margin: 4px 0 0; }
+.forward-box { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); display: grid; gap: 8px; }
+.forward-box .row { justify-content: space-between; }
+.forward-box .recipients { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.forward-box .recipients input { flex: 1; min-width: 180px; }
+.forward-box .confirm p { margin: 2px 0; }
+.forward-box .confirm .row { justify-content: flex-start; gap: 8px; margin-top: 8px; }
+.forward-log .row { justify-content: flex-start; gap: 8px; }
+.forward-box .row.wrap { justify-content: flex-start; gap: 8px; }

@@ -2,6 +2,7 @@ import type {
   AttachmentFile,
   AttachmentInfo,
   ConnectorCapabilities,
+  ForwardRequest,
   IngressMessage,
   MessageAddress,
   MessageChannel,
@@ -321,6 +322,46 @@ export class GraphMailChannel implements MessageChannel {
         if (error.status === 403) {
           // Exchange RBAC for Applications grants reading and sending separately.
           return { state: "rejected", error: `Das Postfach ${this.#config.mailbox} darf über SupportX noch nicht senden: Microsoft lehnt ab (403). Der Microsoft-Admin muss der App das Senderecht geben (Exchange-Rolle „Application Mail.Send“ für dieses Postfach). Nach der Freigabe bis zu etwa einer Stunde warten, dann erneut freigeben und senden. Es wurde nichts verschickt.`, retryable: false };
+        }
+        return { state: "rejected", error: error.message, retryable: error.retryable };
+      }
+      return { state: "uncertain", error: (error as Error).message };
+    }
+  }
+
+  /**
+   * Forward (MS-8): POST /messages/{id}/forward with message.toRecipients and a
+   * comment, 202 Accepted, Mail.Send, saved to Sent Items. Text mode uses
+   * POST /sendMail with a new message. The marker header lets reconcileReply and
+   * ingestion recognise the sent copy. Not a delivery receipt.
+   */
+  async forwardMessage(request: ForwardRequest): Promise<ReplyOutcome> {
+    const headers = [{ name: OUTBOX_HEADER, value: request.marker }];
+    const toRecipients = request.to.map((address) => ({ emailAddress: { address } }));
+    try {
+      if (request.mode === "original") {
+        await this.#call("POST", `${this.#mailboxPath()}/messages/${encodeURIComponent(request.externalMessageId)}/forward`, {
+          message: { toRecipients, internetMessageHeaders: headers },
+          comment: request.comment ? textToHtml(request.comment) : "",
+        });
+      } else {
+        await this.#call("POST", `${this.#mailboxPath()}/sendMail`, {
+          message: {
+            subject: request.subject,
+            body: { contentType: "HTML", content: textToHtml(request.bodyText) },
+            toRecipients,
+            internetMessageHeaders: headers,
+            ...(request.attachments?.length ? { attachments: request.attachments.map((a) => ({ "@odata.type": "#microsoft.graph.fileAttachment", name: a.name, contentType: a.contentType, contentBytes: a.data.toString("base64") })) } : {}),
+          },
+          saveToSentItems: true,
+        });
+      }
+      return { state: "provider_accepted" };
+    } catch (error) {
+      if (error instanceof HttpError) {
+        if (error.uncertain) return { state: "uncertain", error: error.message };
+        if (error.status === 403) {
+          return { state: "rejected", error: `Das Postfach ${this.#config.mailbox} darf über SupportX noch nicht senden: Microsoft lehnt ab (403). Der Microsoft-Admin muss der App das Senderecht geben (Exchange-Rolle „Application Mail.Send“ für dieses Postfach). Es wurde nichts weitergeleitet.`, retryable: false };
         }
         return { state: "rejected", error: error.message, retryable: error.retryable };
       }

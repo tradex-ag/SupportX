@@ -28,6 +28,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorDescriptor> = [
       "Exchange-Online-Postfach und App-Registrierung (Mail.Read, später Mail.Send als Anwendungsberechtigung)",
       "Postfachbeschränkung per Exchange RBAC for Applications (erlaubtes und nicht erlaubtes Postfach testen)",
       "Bleibt der x-supportx-outbox-id-Header in Gesendete Elemente erhalten (Abgleich nach Timeout)?",
+      "Weiterleiten: Gehen die Datei-Anhänge der Original-Mail mit, und bleibt der Marker-Header in der weitergeleiteten Kopie erhalten?",
     ],
     notes: "Eine 202-Antwort von Graph ist eine Annahme, kein Zustellnachweis.",
   },

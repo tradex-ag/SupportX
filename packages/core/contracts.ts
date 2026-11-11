@@ -95,6 +95,16 @@ export interface ReplyAttachment {
   data: Buffer;
 }
 
+/**
+ * Forward one stored mail to addresses a person typed in. "original": the mailbox
+ * forwards the message itself (Graph keeps body and file attachments). "text": a
+ * new mail with prepared text only, for marketplace relay mails whose sender
+ * address must not leave the mailbox.
+ */
+export type ForwardRequest =
+  | { mode: "original"; externalMessageId: string; to: ReadonlyArray<string>; comment: string; marker: string }
+  | { mode: "text"; to: ReadonlyArray<string>; subject: string; bodyText: string; marker: string; attachments?: ReplyAttachment[] };
+
 export type ReplyOutcome =
   | { state: "provider_accepted"; externalMessageId?: string }
   /** The request may or may not have been executed (timeout, connection reset). */
@@ -137,6 +147,8 @@ export interface MessageChannel {
   getAttachment?(externalMessageId: string, externalThreadKey: string, attachmentId: string): Promise<AttachmentFile>;
   /** Only the outbox worker may call this, after its atomic precondition check. */
   sendReply(request: ReplyRequest): Promise<ReplyOutcome>;
+  /** Forward a mail to other addresses (mail connectors only). Called once per confirmed forward. */
+  forwardMessage?(request: ForwardRequest): Promise<ReplyOutcome>;
   /**
    * Look for a sent copy after an uncertain send. Mail carries the outbox marker
    * header; marketplace APIs have no custom headers, so their adapters match our
