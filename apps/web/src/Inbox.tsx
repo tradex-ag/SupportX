@@ -29,6 +29,8 @@ interface CaseRow {
   open_by: string | null;
   waiting_since: string | null;
   reply_hours: number | null;
+  /** "due": goods are back in weclapp and no refund is recorded yet. */
+  refund?: "due" | "done" | "none";
 }
 
 const FILTERS = [
@@ -187,6 +189,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
                   <span className="tag">{PLATFORM_LABEL[c.source_platform] ?? c.source_platform}</span>
                   {c.category === "support" && (c.topic ?? c.intent) && <span className="muted">{INTENT_LABEL[(c.topic ?? c.intent)!] ?? c.topic ?? c.intent}</span>}
                   <span className={`state ${state.tone}`}>{state.text}</span>
+                  {c.refund === "due" && c.status !== "closed" && <span className="refund-flag" title="Ware ist in weclapp als zurück gebucht, eine Erstattung ist noch nicht erfasst.">Erstattung offen</span>}
                   {due && <span className={`deadline ${due.tone}`} title={`Antwort fällig bis ${fmtDate(due.dueAt.toISOString())} (${c.reply_hours} Std. ab der Kundennachricht)`}><i aria-hidden="true" />{due.label}</span>}
                 </div>
                 {c.open_by && <div className="small presence-line">Gerade offen bei {c.open_by}</div>}

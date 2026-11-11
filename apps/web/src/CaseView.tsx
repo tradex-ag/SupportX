@@ -11,6 +11,7 @@ import { formatKg, weightChecks, WEIGHT_SOURCE_NOTE } from "../../../packages/co
 import { buildTimeline } from "../../../packages/core/timeline.ts";
 import { AmazonOfferCard, LISTING_STATE, listingActionText, type ListingAction } from "./AmazonOffer.tsx";
 import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
+import type { RefundDue } from "../../../packages/core/refund-due.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -69,6 +70,8 @@ interface CaseData {
   listingActions?: ListingAction[];
   /** Set when the workspace has an Amazon SP-API access: the marketplaces it may change. */
   amazonListings?: { marketplaceIds: string[] } | null;
+  /** Goods back in weclapp and no refund recorded yet: the refund is to be done. */
+  refund?: RefundDue;
 }
 
 /** Readable names for the Protokoll; unknown actions show their technical name. */
@@ -736,6 +739,7 @@ function OrderPanel({ data, canEdit, onLink, onRefresh, invoiceFiles, documentBa
       {order && (
         <OrderDetails
           order={order}
+          refund={data.refund}
           returns={<ReturnBox order={order} canEdit={canEdit} onRefresh={onRefresh} />}
           links={orderLinks({
             order,
@@ -848,12 +852,26 @@ function WeightBox({ order }: { order: OrderSnapshot }) {
   );
 }
 
-function OrderDetails({ order, links, invoices, returns }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode; returns: React.ReactNode }) {
+function OrderDetails({ order, links, invoices, returns, refund }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode; returns: React.ReactNode; refund?: RefundDue }) {
+  const due = refund?.state === "due";
+  const hasRefundLink = links.some((l) => l.kind === "refund");
   return (
     <div className="order">
+      {due && (
+        <div className="refund-due-notice" role="status">
+          <strong>{refund!.headline}</strong>
+          <span className="small">{hasRefundLink ? "Über „Bestellung erstatten“ im Marktplatz erstatten und danach unten unter Ergebnis „Erstattet“ wählen." : "Im Marktplatz bzw. in weclapp erstatten und danach unten unter Ergebnis „Erstattet“ wählen."}</span>
+        </div>
+      )}
+      {refund?.state === "done" && <p className="small ok-text">{refund.headline}</p>}
       {links.length > 0 && (
         <div className="row wrap order-links">
-          {links.map((l) => <a key={l.href} className="button" href={l.href} target="_blank" rel="noopener noreferrer">{l.label} ↗</a>)}
+          {links.map((l) => (
+            <a key={l.href} className={l.kind === "refund" && due ? "button refund-due" : "button"} href={l.href} target="_blank" rel="noopener noreferrer"
+              title={l.kind === "refund" && due ? "Ware ist zurück, Erstattung ist noch offen." : undefined}>
+              {l.label} ↗
+            </a>
+          ))}
         </div>
       )}
       <div className="kv"><span>Auftrag</span><strong>{order.orderNumber ?? order.id}</strong></div>

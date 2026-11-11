@@ -16,6 +16,8 @@ import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { deadlineState, MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
 import { TOPICS } from "../core/topic.ts";
+import { refundDue, type RefundDue, type RelatedRefundCase } from "../core/refund-due.ts";
+import { returnSummary, type ReturnOrderInput } from "../core/returns.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
 
@@ -53,7 +55,7 @@ function likePattern(q: string): string {
   return `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
 }
 
-export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter, query?: string, topic?: string) {
+export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilter, query?: string, topic?: string): Promise<Array<Record<string, any>>> {
   if (topic && !(TOPICS as readonly string[]).includes(topic)) throw new ServiceError(400, "INVALID", "Unbekanntes Anliegen.");
   const q = query?.trim().slice(0, 100) ?? "";
   if (q.length === 1) throw new ServiceError(400, "INVALID", "Bitte mindestens zwei Zeichen eingeben.");
@@ -75,10 +77,14 @@ export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilte
       OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.order_references) r WHERE r->>'value' ILIKE $3)
       OR EXISTS (SELECT 1 FROM order_links ol WHERE ol.workspace_id = c.workspace_id AND ol.conversation_id = c.id AND ol.is_current AND ol.snapshot::text ILIKE $3)
       OR EXISTS (SELECT 1 FROM messages m WHERE m.workspace_id = c.workspace_id AND m.conversation_id = c.id AND (m.body_text ILIKE $3 OR m.from_name ILIKE $3 OR m.from_address ILIKE $3)))`;
-  return many(
+  const rows = await many<Record<string, unknown> & { id: string; outcome: string | null; order_return: (ReturnOrderInput & { orderNumber?: string; orderNumberAtCustomer?: string }) | null; external_order_id: string | null }>(
     ctx.db,
     `SELECT * FROM (
-       SELECT c.id, c.subject, c.status, c.category, c.category_reason, c.source_platform, c.customer_address, c.customer_name, c.order_match_status, c.last_message_at, c.last_error, c.snooze_until, c.topic, c.topic_source,
+       SELECT c.id, c.subject, c.status, c.category, c.category_reason, c.source_platform, c.customer_address, c.customer_name, c.order_match_status, c.last_message_at, c.last_error, c.snooze_until, c.topic, c.topic_source, c.outcome,
+              (SELECT jsonb_build_object('lines', coalesce(ol.snapshot->'lines', '[]'), 'shipments', coalesce(ol.snapshot->'shipments', '[]'), 'invoices', coalesce(ol.snapshot->'invoices', '[]'),
+                                         'returns', ol.snapshot->'returns', 'returnsError', ol.snapshot->'returnsError', 'orderNumber', ol.snapshot->'orderNumber', 'orderNumberAtCustomer', ol.snapshot->'orderNumberAtCustomer')
+                 FROM order_links ol WHERE ol.workspace_id = c.workspace_id AND ol.conversation_id = c.id AND ol.is_current AND ol.status = 'unique' AND ol.snapshot IS NOT NULL) AS order_return,
+              (SELECT ol.external_order_id FROM order_links ol WHERE ol.workspace_id = c.workspace_id AND ol.conversation_id = c.id AND ol.is_current AND ol.status = 'unique') AS external_order_id,
               ma.name AS merchant_account_name, cc.display_name AS connection_name, cc.kind AS connection_kind, u.display_name AS assignee_name,
               (SELECT d.status FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS draft_status,
               (SELECT d.intent FROM drafts d WHERE d.conversation_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS intent,
@@ -99,6 +105,45 @@ export async function listCases(ctx: AppContext, actor: Actor, filter: CaseFilte
      ORDER BY ${order} LIMIT 200`,
     [actor.workspaceId, actor.type === "user" ? actor.userId : null, q ? likePattern(q) : null, topic || null],
   );
+  // "Erstattung offen": goods are back in the ERP and no refund is recorded yet.
+  return Promise.all(rows.map(async ({ order_return, external_order_id, ...row }) => {
+    const order = order_return ? { ...order_return, returns: order_return.returns ?? undefined, returnsError: order_return.returnsError ?? undefined } : null;
+    let refund: RefundDue["state"] = "none";
+    if (order && returnSummary(order).state === "received") {
+      const related = await relatedRefundCases(ctx, actor.workspaceId, row.id, external_order_id, [order.orderNumber, order.orderNumberAtCustomer]);
+      refund = refundDue({ order, outcome: row.outcome, subject: row.subject as string | null, related }).state;
+    }
+    return { ...row, refund };
+  }));
+}
+
+/**
+ * Other cases about the same order, any category (marketplace notices such as
+ * "Rückerstattung veranlasst" are sorted as information): same order number in
+ * the references or the same ERP order linked.
+ */
+async function relatedRefundCases(ctx: AppContext, ws: string, conversationId: string, externalOrderId: string | null, numbers: ReadonlyArray<string | null | undefined>): Promise<RelatedRefundCase[]> {
+  const values = numbers.map((n) => n?.trim()).filter((n): n is string => !!n);
+  if (!externalOrderId && values.length === 0) return [];
+  return many<RelatedRefundCase>(
+    ctx.db,
+    `SELECT o.subject, o.outcome, o.last_message_at
+       FROM conversations o
+      WHERE o.workspace_id = $1 AND o.id <> $2
+        AND (EXISTS (SELECT 1 FROM jsonb_array_elements(o.order_references) r WHERE r->>'value' = ANY($3::text[]))
+          OR ($4::text IS NOT NULL AND EXISTS (SELECT 1 FROM order_links l WHERE l.workspace_id = o.workspace_id AND l.conversation_id = o.id AND l.is_current AND l.external_order_id = $4)))
+      ORDER BY o.last_message_at DESC NULLS LAST
+      LIMIT 20`,
+    [ws, conversationId, values, externalOrderId],
+  );
+}
+
+/** Refund hint for the case view, see core/refund-due.ts. */
+async function refundDueFor(ctx: AppContext, ws: string, conversationId: string, conv: { outcome: string | null; subject: string | null }, link: { status: string; external_order_id?: string | null; snapshot: OrderRecord | null } | null): Promise<RefundDue> {
+  const order = link?.status === "unique" ? link.snapshot : null;
+  if (!order || returnSummary(order).state !== "received") return refundDue({ order: null });
+  const related = await relatedRefundCases(ctx, ws, conversationId, link?.external_order_id ?? null, [order.orderNumber, order.orderNumberAtCustomer]);
+  return refundDue({ order, outcome: conv.outcome, subject: conv.subject, related });
 }
 
 export async function getCase(ctx: AppContext, actor: Actor, conversationId: string) {
@@ -172,7 +217,8 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const invoices = invoiceSummary(link?.status === "unique" ? link.snapshot : null);
   const forwards = await caseForwards(ctx, ws, conversationId);
   const [listingActions, amazonListings] = await Promise.all([listCaseListingActions(ctx.db, ws, conversationId), caseAmazonListingAccess(ctx.db, ws)]);
-  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings };
+  const refund = await refundDueFor(ctx, ws, conversationId, conversation as { outcome: string | null; subject: string | null }, orderLink as { status: string; external_order_id: string | null; snapshot: OrderRecord | null } | null);
+  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund };
 }
 
 /**

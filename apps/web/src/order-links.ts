@@ -7,6 +7,8 @@
 export interface OrderLink {
   label: string;
   href: string;
+  /** "refund" opens the marketplace's refund form; it is highlighted when the refund is due. */
+  kind?: "refund";
 }
 
 export interface OrderLinkInput {
@@ -49,7 +51,7 @@ export function orderLinks(input: OrderLinkInput): OrderLink[] {
   if (amazon) {
     links.push({ label: "Bestellung in Seller Central", href: `https://sellercentral.amazon.de/orders-v3/order/${amazon}` });
     // Opens Amazon's refund form for this order; the refund itself is done there by a person.
-    links.push({ label: "Bestellung erstatten", href: `https://sellercentral.amazon.de/gp/orders-v2/refund?orderID=${amazon}` });
+    links.push({ label: "Bestellung erstatten", href: `https://sellercentral.amazon.de/gp/orders-v2/refund?orderID=${amazon}`, kind: "refund" });
   }
   else if (ebay) links.push({ label: "Bestellung bei eBay", href: `https://www.ebay.de/sh/ord/details?orderid=${ebay}` });
   else if (platforms.has("shop_apotheke") && order.orderNumberAtCustomer) {
