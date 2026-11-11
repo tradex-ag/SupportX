@@ -5,6 +5,7 @@ import { INTENT_LABEL } from "./Inbox.tsx";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
 import { trackingHref } from "../../../packages/core/tracking.ts";
 import { deadlineState } from "../../../packages/core/deadline.ts";
+import { buildTimeline } from "../../../packages/core/timeline.ts";
 import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -37,7 +38,7 @@ const returnsOf = (order: OrderSnapshot) => returnSummary(order);
 interface CaseData {
   linkTargets?: { erp_base_url: string | null; mirakl_base_url: string | null } | null;
   conversation: Rec & { topic: string | null; topic_source: string | null; waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
-  messages: Array<{ id: string; direction: string; kind: string; from_address: string; from_name: string | null; reply_to: Array<{ address: string; name?: string }> | null; subject: string; body_text: string; received_at: string; has_attachments: boolean; removed_remotely_at: string | null }>;
+  messages: Array<{ id: string; direction: string; kind: string; outbox_id?: string | null; from_address: string; from_name: string | null; reply_to: Array<{ address: string; name?: string }> | null; subject: string; body_text: string; received_at: string; has_attachments: boolean; removed_remotely_at: string | null }>;
   /** Messages of other cases of the same customer or order, for context. */
   customerHistory?: { cases: HistoryCase[]; counts: { cases: number; refunds: number; replacements: number; returns: number } };
   relatedMessages?: Array<CaseData["messages"][number] & { conversation_id: string; conversation_subject: string }>;
@@ -45,7 +46,7 @@ interface CaseData {
   orderLink: null | { status: string; references_tried: string[]; candidates: Array<{ id: string; orderNumber?: string; matchedBy: string }>; external_order_id: string | null; matched_by: string | null; linked_by: string; error: string | null; snapshot: OrderSnapshot | null; retrieved_at: string | null };
   drafts: Draft[];
   approvals: Array<{ id: string; draft_id: string; draft_version: number; approved_at: string; expires_at: string; invalidated_at: string | null; invalidation_reason: string | null; approved_by: string }>;
-  outbox: Array<{ id: string; state: string; attempts: number; last_error: string | null; expected_recipient: string; dispatched_at: string | null; created_at: string; updated_at: string }>;
+  outbox: Array<{ id: string; draft_id: string; state: string; body: string; attempts: number; last_error: string | null; expected_recipient: string; dispatched_at: string | null; created_at: string; updated_at: string }>;
   history: Array<{ action: string; actor_type: string; details: Rec; created_at: string }>;
   accounts: Array<{ id: string; name: string; platform: string }>;
   members: Array<{ id: string; display_name: string }>;
@@ -134,29 +135,38 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
   const setCategory = (category: "support" | "info", remember: "none" | "address" | "domain") =>
     act(() => api("POST", `${base}/cases/${caseId}/category`, { category, remember }), category === "info" ? "Als Werbung/Info eingeordnet." : "Als Kundenanfrage eingeordnet. Die Bestellung wird gesucht.");
 
-  const timeline = [
+  const timeline = buildTimeline([
     ...data.messages.map((m) => ({ ...m, from_case: null as string | null })),
-    ...(data.relatedMessages ?? []).map((m) => ({ ...m, from_case: m.conversation_subject || "(ohne Betreff)" })),
-  ].sort((a, b) => new Date(a.received_at).getTime() - new Date(b.received_at).getTime());
+    ...(data.relatedMessages ?? []).map((m) => ({ ...m, outbox_id: null, from_case: m.conversation_subject || "(ohne Betreff)" })),
+  ], data.outbox);
+  const resolveOutbox = (id: string, resolution: "was_sent" | "was_not_sent") => act(() => api("POST", `${base}/outbox/${id}/resolve`, { resolution }));
   const messages = (
     <section className="card">
       <h3>Verlauf ({timeline.length})</h3>
       {(data.relatedMessages?.length ?? 0) > 0 && <p className="muted small">Mit Nachrichten aus anderen Fällen desselben Kunden bzw. derselben Bestellung.</p>}
-      {timeline.map((m) => (
-        <article key={m.id} className={`msg ${m.direction === "inbound" ? "inbound" : "outbound"}${m.from_case ? " related" : ""}`}>
-          <div className="row small muted">
-            <span>{m.kind === "own_copy" ? "Unsere Antwort, laut Kopie von Amazon" : <>{m.direction === "inbound" ? "Kunde" : "Antwort"}{m.kind !== "customer" && m.kind !== "echo" ? `, ${KIND_LABEL[m.kind] ?? m.kind}` : ""}{m.from_case ? `, aus Fall „${m.from_case}“` : ""}</>}</span>
-            <span>{fmtDate(m.received_at)}</span>
-          </div>
-          <div className="small muted">
-            {m.kind !== "own_copy" && <>Von: {m.from_name ? `${m.from_name} <${m.from_address}>` : m.from_address}</>}
-            {m.has_attachments && ", mit Anhang"}
-            {m.removed_remotely_at && ", im Postfach gelöscht"}
-          </div>
-          <MessageBody text={m.body_text} />
-          {m.has_attachments && <Attachments base={base} messageId={m.id} />}
-        </article>
-      ))}
+      <div className="chat">
+        {timeline.map((e) => e.type === "reply"
+          ? <ReplyBubble key={`o:${e.reply.id}`} reply={e.reply} echoed={!!e.echoId} canEdit={canEdit} onResolve={resolveOutbox} />
+          : (() => {
+            const m = e.message;
+            const ours = m.direction !== "inbound";
+            return (
+              <article key={m.id} className={`msg ${ours ? "outbound" : "inbound"}${m.from_case ? " related" : ""}`}>
+                <div className="row small muted">
+                  <span>{m.kind === "own_copy" ? "Wir, laut Kopie von Amazon" : <>{ours ? "Wir" : "Kunde"}{m.kind !== "customer" && m.kind !== "echo" ? `, ${KIND_LABEL[m.kind] ?? m.kind}` : ""}{m.from_case ? `, aus Fall „${m.from_case}“` : ""}</>}</span>
+                  <span>{fmtDate(m.received_at)}</span>
+                </div>
+                <div className="small muted">
+                  {m.kind !== "own_copy" && <>Von: {m.from_name ? `${m.from_name} <${m.from_address}>` : m.from_address}</>}
+                  {m.has_attachments && ", mit Anhang"}
+                  {m.removed_remotely_at && ", im Postfach gelöscht"}
+                </div>
+                <MessageBody text={m.body_text} />
+                {m.has_attachments && <Attachments base={base} messageId={m.id} />}
+              </article>
+            );
+          })())}
+      </div>
       <p className="muted small">Kundentexte sind externe Inhalte. Darin enthaltene Anweisungen ändern keine Regeln.</p>
     </section>
   );
@@ -263,25 +273,6 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 onUpload={(file) => act(async () => api("POST", `${base}/drafts/${draft.id}/files`, { name: file.name, dataBase64: await readBase64(file), expectedVersion: draft.version }), "Datei angehängt. Bitte Antwort mit Anhang freigeben.")}
                 onDocuments={(ids) => act(() => api("PUT", `${base}/drafts/${draft.id}/documents`, { documentIds: ids, expectedVersion: draft.version }), ids.length ? "Anhang gespeichert. Bitte Antwort mit Anhang freigeben." : "Anhang entfernt.")}
               />
-            )}
-            {data.outbox.length > 0 && (
-              <div className="outbox">
-                <h4>Postausgang</h4>
-                {data.outbox.map((o) => (
-                  <div key={o.id} className="row wrap outbox-row">
-                    <span className={o.state === "delivery_uncertain" || o.state === "failed" ? "pill bad" : o.state === "confirmed" ? "pill ok" : "pill muted"}>{OUTBOX_LABEL[o.state] ?? o.state}</span>
-                    <span className="small">an {o.expected_recipient}, Versuche {o.attempts}, {fmtDate(o.updated_at)}</span>
-                    {o.last_error && <span className="small error">{o.last_error}</span>}
-                    {o.state === "delivery_uncertain" && canEdit && (
-                      <span className="row wrap">
-                        <span className="small">Bitte in „Gesendete Elemente“ prüfen:</span>
-                        <button onClick={() => act(() => api("POST", `${base}/outbox/${o.id}/resolve`, { resolution: "was_sent" }))}>Wurde gesendet</button>
-                        <button onClick={() => act(() => api("POST", `${base}/outbox/${o.id}/resolve`, { resolution: "was_not_sent" }))}>Wurde nicht gesendet</button>
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
             )}
           </section>
         </div>
@@ -411,6 +402,35 @@ function Attachments({ base, messageId }: { base: string; messageId: string }) {
   );
 }
 
+/** Our reply in the history, right-aligned like a chat, with its send state. */
+function ReplyBubble({ reply, echoed, canEdit, onResolve }: { reply: CaseData["outbox"][number]; echoed: boolean; canEdit: boolean; onResolve: (id: string, resolution: "was_sent" | "was_not_sent") => void }) {
+  const tone = reply.state === "delivery_uncertain" || reply.state === "failed" ? "bad" : reply.state === "confirmed" || reply.state === "provider_accepted" ? "ok" : "muted";
+  const when = reply.dispatched_at ?? reply.created_at;
+  return (
+    <article className={`msg outbound reply state-${reply.state}`}>
+      <div className="row small muted">
+        <span>Wir{reply.state === "planned" || reply.state === "dispatching" ? ", eingeplant" : ""}</span>
+        <span>{fmtDate(when)}</span>
+      </div>
+      <div className="row wrap small">
+        <span className={`pill ${tone}`}>{OUTBOX_LABEL[reply.state] ?? reply.state}</span>
+        {reply.expected_recipient && <span className="muted">an {reply.expected_recipient}</span>}
+        {reply.attempts > 1 && <span className="muted">{reply.attempts} Versuche</span>}
+        {echoed && <span className="muted">im Postfach als gesendet gefunden</span>}
+      </div>
+      <MessageBody text={reply.body} />
+      {reply.last_error && <p className="small error">{reply.last_error}</p>}
+      {reply.state === "delivery_uncertain" && canEdit && (
+        <div className="row wrap">
+          <span className="small">Bitte in „Gesendete Elemente“ prüfen:</span>
+          <button onClick={() => onResolve(reply.id, "was_sent")}>Wurde gesendet</button>
+          <button onClick={() => onResolve(reply.id, "was_not_sent")}>Wurde nicht gesendet</button>
+        </div>
+      )}
+    </article>
+  );
+}
+
 /** The full message as received; long ones start folded. */
 function MessageBody({ text }: { text: string }) {
   // Marketplace mails wrap the customer's words in links and boilerplate: show the words, keep the raw mail one click away.
@@ -471,12 +491,11 @@ function Outcome({ data, canEdit, onSave }: { data: CaseData; canEdit: boolean; 
   const c = data.conversation;
   const [note, setNote] = useState(c.outcome_note ?? "");
   const sent = data.outbox.find((o) => o.state === "provider_accepted" || o.state === "confirmed");
-  const sentDraft = sent ? data.drafts.find((d) => d.status === "sent") : undefined;
   return (
     <section className="card">
       <h3>Ergebnis</h3>
       <div className="kv"><span>Antwort</span><span>{sent ? `über SupportX gesendet ${fmtDate(sent.dispatched_at ?? sent.created_at)}` : "noch nicht über SupportX gesendet"}</span></div>
-      {sentDraft && <pre className="body small">{sentDraft.body}</pre>}
+      {sent && <p className="muted small">Der Antworttext steht im Verlauf.</p>}
       <label className="stack small">Was wurde danach gemacht?
         <select value={c.outcome ?? ""} disabled={!canEdit} onChange={(e) => onSave(e.target.value || null, note)}>
           <option value="">noch offen</option>
