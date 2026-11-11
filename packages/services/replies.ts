@@ -407,6 +407,10 @@ export async function approveByRule(ctx: AppContext, workspaceId: string, draftI
 export interface SendStatus {
   allowed: boolean;
   blockers: string[];
+  /** A reply to the latest customer message is already queued or sent (state and the blocker text it adds). Display only. */
+  pending: { state: string; text: string } | null;
+  /** True when a blocker comes from the marketplace card (sending switched off or reply route not checked). Display only. */
+  setupMissing: boolean;
 }
 
 /** Why a reply can or cannot be sent right now. Shared by UI, worker and (later) MCP. */
@@ -414,6 +418,7 @@ export async function sendBlockers(ctx: AppContext, q: Queryable, workspaceId: s
   const conv = await loadConversation(q, workspaceId, conversationId);
   const connection = await loadChannelConnection(q, workspaceId, conv.connection_id);
   const blockers: string[] = [];
+  let pending: SendStatus["pending"] = null;
   if (ctx.config.SEND_MODE !== "enabled") blockers.push("Versand ist für diese Installation deaktiviert (SEND_MODE=drafts_only). Es werden nur Entwürfe erstellt.");
   if (!connection.send_enabled) blockers.push(`Versand ist für die Verbindung „${connection.display_name}“ nicht aktiviert.`);
   if (connection.paused) blockers.push("Die Verbindung ist pausiert.");
@@ -429,9 +434,13 @@ export async function sendBlockers(ctx: AppContext, q: Queryable, workspaceId: s
       "SELECT state FROM outbox WHERE workspace_id = $1 AND idempotency_key = $2 AND state NOT IN ('failed','suppressed')",
       [workspaceId, idempotencyKey(conv.id, conv.latest_inbound_message_id)],
     );
-    if (live) blockers.push(`Auf die letzte Kundennachricht gibt es bereits einen Versandauftrag (Status: ${live.state}).`);
+    if (live) {
+      const text = `Auf die letzte Kundennachricht gibt es bereits einen Versandauftrag (Status: ${live.state}).`;
+      blockers.push(text);
+      pending = { state: live.state, text };
+    }
   }
-  return { allowed: blockers.length === 0, blockers };
+  return { allowed: blockers.length === 0, blockers, pending, setupMissing: !connection.send_enabled || !route };
 }
 
 function idempotencyKey(conversationId: string, inboundMessageId: string): string {

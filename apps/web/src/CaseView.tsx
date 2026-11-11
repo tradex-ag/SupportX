@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { orderLinks, type OrderLink } from "./order-links.ts";
 import { api, fmtDate, MATCH_LABEL, OUTBOX_LABEL, PLATFORM_LABEL } from "./api.ts";
 import { INTENT_LABEL } from "./Inbox.tsx";
+import { sendNotice, type SendInfo } from "./send-notice.ts";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
 import { trackingHref } from "../../../packages/core/tracking.ts";
 import { deadlineState } from "../../../packages/core/deadline.ts";
@@ -51,7 +52,7 @@ interface CaseData {
   history: Array<{ action: string; actor_type: string; details: Rec; created_at: string }>;
   accounts: Array<{ id: string; name: string; platform: string }>;
   members: Array<{ id: string; display_name: string }>;
-  send: { allowed: boolean; blockers: string[] };
+  send: SendInfo;
   titleHints?: string[];
   writer?: "own_key" | "installation" | "rules";
   replyFiles?: { supported: boolean; note: string };
@@ -757,6 +758,7 @@ function DraftEditor(props: {
   documents: DocumentInfo[]; caseFiles: CaseFile[]; replyFiles: { supported: boolean; note: string }; documentBase: string; onDocuments: (ids: string[]) => void; onUpload: (file: File) => void;
 }) {
   const { draft, canEdit, approval, send } = props;
+  const notice = sendNotice(send);
   const [body, setBody] = useState(draft.body);
   const [ack, setAck] = useState(false);
   const [polishing, setPolishing] = useState(false);
@@ -830,11 +832,12 @@ function DraftEditor(props: {
           )}
         </div>
       )}
-      {!send.allowed && (
+      {notice.status && <p className="small"><span className={`pill ${notice.status.tone}`}>{notice.status.text}</span></p>}
+      {notice.blocked.length > 0 && (
         <div className="send-blocked small">
-          <strong>Senden ist noch gesperrt</strong>
-          <ul>{send.blockers.map((b) => <li key={b}>{b}</li>)}</ul>
-          <p className="muted">Freischalten in den Einstellungen auf der Karte des Marktplatzes. Bis dahin den Text kopieren und im Marktplatz selbst senden.</p>
+          <strong>Senden ist gesperrt</strong>
+          <ul>{notice.blocked.map((b) => <li key={b}>{b}</li>)}</ul>
+          {notice.setupHint && <p className="muted">Freischalten in den Einstellungen auf der Karte des Marktplatzes. Bis dahin den Text kopieren und im Marktplatz selbst senden.</p>}
         </div>
       )}
     </div>

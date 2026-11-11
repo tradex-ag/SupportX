@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 import { setSendEnabled, verifyReplyRoute } from "../../packages/services/connections.ts";
 import type { ServiceError } from "../../packages/services/context.ts";
-import { approveDraft, dispatchOutbox, editDraft, queueReply, reconcileOutbox, resolveUncertainSend } from "../../packages/services/replies.ts";
+import { approveDraft, dispatchOutbox, editDraft, queueReply, reconcileOutbox, resolveUncertainSend, sendBlockers } from "../../packages/services/replies.ts";
 import { enrichConversation } from "../../packages/services/matching.ts";
 import { many, one } from "../../packages/storage/db.ts";
 import { OUTBOX_HEADER } from "../../packages/connectors/microsoft/graph-mail.ts";
@@ -192,6 +192,11 @@ describe("approvals and sending", () => {
     assert.equal(ok.length, 1);
     assert.ok(["DUPLICATE_REPLY", "SEND_BLOCKED"].includes((failed[0]!.reason as ServiceError).code));
     const outboxId = ok[0]!.value;
+    // The case view gets the queued reply as a status, not only as a blocker text.
+    const status = await sendBlockers(h!.ctx, h!.ctx.db, s.workspaceId, conv.id);
+    assert.equal(status.pending?.state, "planned");
+    assert.ok(status.blockers.includes(status.pending!.text));
+    assert.equal(status.setupMissing, false);
     await rejectsWith(queueReply(h!.ctx, s.agent, approvalId), "SEND_BLOCKED");
     assert.equal(await dispatchOutbox(h!.ctx, s.workspaceId, outboxId), "provider_accepted");
     assert.equal(h!.graph.replies.length, 1);
