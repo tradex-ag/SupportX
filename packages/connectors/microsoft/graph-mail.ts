@@ -321,7 +321,7 @@ export class GraphMailChannel implements MessageChannel {
         if (error.uncertain) return { state: "uncertain", error: error.message };
         if (error.status === 403) {
           // Exchange RBAC for Applications grants reading and sending separately.
-          return { state: "rejected", error: `Das Postfach ${this.#config.mailbox} darf über SupportX noch nicht senden: Microsoft lehnt ab (403). Der Microsoft-Admin muss der App das Senderecht geben (Exchange-Rolle „Application Mail.Send“ für dieses Postfach). Nach der Freigabe bis zu etwa einer Stunde warten, dann erneut freigeben und senden. Es wurde nichts verschickt.`, retryable: false };
+          return { state: "rejected", error: `Das Postfach ${this.#config.mailbox} darf über SupportX noch nicht senden: Microsoft lehnt ab (403). Der Microsoft-Admin muss der App das Senderecht geben (Exchange-Rolle „Application Mail.Send“ für dieses Postfach). Nach der Freigabe bis zu etwa einer Stunde warten, dann erneut senden. Es wurde nichts verschickt.`, retryable: false };
         }
         return { state: "rejected", error: error.message, retryable: error.retryable };
       }

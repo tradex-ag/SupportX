@@ -45,10 +45,10 @@ import { draftInvoiceReply, fetchCaseInvoices } from "../../packages/services/in
 import { deleteLogo, getLogo, logoVersion, previewDesign, resetDesign, saveDesign, saveLogo, workspaceTheme } from "../../packages/services/design.ts";
 import { writeDesignMd, type WorkspaceTheme } from "../../packages/core/design-md.ts";
 import { checkAmazonListingConnection, closeAmazonOffer, deleteAmazonListingConnection, getAmazonListingSettings, lookupAmazonListing, saveAmazonListingConnection } from "../../packages/services/amazon-listings.ts";
-import { approveAndSendMany, batchCandidates } from "../../packages/services/batch.ts";
+import { batchCandidates, sendMany } from "../../packages/services/batch.ts";
 import { supportReport } from "../../packages/services/reports.ts";
 import { evidencePdf } from "../../packages/services/evidence.ts";
-import { approveDraft, composeDraft, discardDraft, editDraft, polishDraft, queueReply, renderSnippet, requestRedraft, resolveUncertainSend, snippetDraft } from "../../packages/services/replies.ts";
+import { composeDraft, discardDraft, editDraft, polishDraft, renderSnippet, requestRedraft, resolveUncertainSend, sendDraft, snippetDraft } from "../../packages/services/replies.ts";
 
 const SESSION_COOKIE = "supportx_session";
 const webDist = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
@@ -307,7 +307,7 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     const body = parse(z.object({ body: z.string().max(10_000), expectedVersion: z.number().int().positive() }), req.body);
     return editDraft(ctx, await actor(req), (req.params as { id: string }).id, body);
   });
-  // "Rechnung senden": invoice PDF from weclapp as a draft with attachment; sending still needs approval and a click.
+  // "Rechnung senden": invoice PDF from weclapp as a draft with attachment; it is sent only on a click on "Senden".
   // "Rechnung herunterladen": invoice PDF(s) from weclapp kept with the case; sends nothing.
   app.post("/api/w/:ws/cases/:id/invoices/fetch", async (req) => fetchCaseInvoices(ctx, await actor(req), (req.params as { id: string }).id));
   app.post("/api/w/:ws/cases/:id/invoice-reply", async (req) => draftInvoiceReply(ctx, await actor(req), (req.params as { id: string }).id));
@@ -351,9 +351,10 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     await discardDraft(ctx, await actor(req), (req.params as { id: string }).id);
     return { ok: true };
   });
-  app.post("/api/w/:ws/drafts/:id/approve", async (req) => {
+  // One click "Senden": no separate approval step (0.9.4); all send guards run inside sendDraft.
+  app.post("/api/w/:ws/drafts/:id/send", async (req) => {
     const body = parse(z.object({ expectedVersion: z.number().int().positive(), acknowledgeWarnings: z.boolean().default(false) }), req.body);
-    return { approvalId: await approveDraft(ctx, await actor(req), (req.params as { id: string }).id, body) };
+    return { outboxId: await sendDraft(ctx, await actor(req), (req.params as { id: string }).id, body) };
   });
   app.get("/api/w/:ws/cases/:id/evidence.pdf", async (req, reply) => {
     const pdf = await evidencePdf(ctx, await actor(req), (req.params as { id: string }).id);
@@ -372,11 +373,10 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     const body = parse(z.object({ conversationIds: z.array(z.string()).max(50) }), req.body);
     return { items: await batchCandidates(ctx, await actor(req), body.conversationIds) };
   });
-  app.post("/api/w/:ws/batch/approve-send", async (req) => {
+  app.post("/api/w/:ws/batch/send", async (req) => {
     const body = parse(z.object({ items: z.array(z.object({ draftId: z.string(), expectedVersion: z.number().int().positive() })).min(1).max(50) }), req.body);
-    return { results: await approveAndSendMany(ctx, await actor(req), body.items) };
+    return { results: await sendMany(ctx, await actor(req), body.items) };
   });
-  app.post("/api/w/:ws/approvals/:id/send", async (req) => ({ outboxId: await queueReply(ctx, await actor(req), (req.params as { id: string }).id) }));
   app.post("/api/w/:ws/outbox/:id/resolve", async (req) => {
     const body = parse(z.object({ resolution: z.enum(["was_sent", "was_not_sent"]) }), req.body);
     await resolveUncertainSend(ctx, await actor(req), (req.params as { id: string }).id, body.resolution);

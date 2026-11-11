@@ -59,10 +59,10 @@ describe("HTTP API: authentication, CSRF and workspace isolation", () => {
     const foreignCase = await app.inject({ method: "GET", url: `/api/w/${a.workspaceId}/cases/${caseB}`, headers: { cookie: cookieA } });
     assert.equal(foreignCase.statusCode, 404);
     const draftsB = await many<{ id: string; version: number }>(h.ctx.db, "SELECT id, version FROM drafts WHERE workspace_id = $1 LIMIT 1", [b.workspaceId]);
-    const approve = await app.inject({
-      method: "POST", url: `/api/w/${a.workspaceId}/drafts/${draftsB[0]!.id}/approve`, headers: { cookie: cookieA, "x-supportx-request": "1" }, payload: { expectedVersion: draftsB[0]!.version, acknowledgeWarnings: true },
+    const send = await app.inject({
+      method: "POST", url: `/api/w/${a.workspaceId}/drafts/${draftsB[0]!.id}/send`, headers: { cookie: cookieA, "x-supportx-request": "1" }, payload: { expectedVersion: draftsB[0]!.version, acknowledgeWarnings: true },
     });
-    assert.equal(approve.statusCode, 404);
+    assert.equal(send.statusCode, 404);
   });
 
   it("never exposes credentials in settings", async () => {

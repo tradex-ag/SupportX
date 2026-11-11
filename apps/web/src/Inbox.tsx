@@ -79,7 +79,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [topic, setTopic] = useState("");
-  // Ready replies ticked for approving several at once.
+  // Ready replies ticked for sending several at once.
   const [picked, setPicked] = useState<string[]>([]);
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   // Search after a short pause in typing, not on every key.
@@ -180,7 +180,7 @@ export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }
                   <span className="muted small nowrap">{fmtDate(c.last_message_at)}</span>
                 </div>
                 <div className="subject">
-                  {pickable && <input type="checkbox" className="pick" checked={picked.includes(c.id)} aria-label="Für gemeinsame Freigabe auswählen" title="Für gemeinsame Freigabe auswählen" onClick={(e) => e.stopPropagation()} onChange={() => toggle(c.id)} />}
+                  {pickable && <input type="checkbox" className="pick" checked={picked.includes(c.id)} aria-label="Zum gemeinsamen Senden auswählen" title="Zum gemeinsamen Senden auswählen" onClick={(e) => e.stopPropagation()} onChange={() => toggle(c.id)} />}
                   {c.subject || "(ohne Betreff)"}
                 </div>
                 <div className="row wrap small">

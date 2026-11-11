@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { approveAndSendMany, batchCandidates } from "../../packages/services/batch.ts";
+import { sendMany, batchCandidates } from "../../packages/services/batch.ts";
 import { caseCounts, getCase, setOutcome, updateWorkspaceSettings } from "../../packages/services/cases.ts";
 import { setSendEnabled, verifyReplyRoute } from "../../packages/services/connections.ts";
 import type { ServiceError } from "../../packages/services/context.ts";
@@ -58,18 +58,18 @@ describe("Mehrere Antworten freigeben", () => {
     assert.ok(notReady.every((i) => i.reasons.length > 0));
     await rejectsWith(batchCandidates(h.ctx, s.viewer, ids), "FORBIDDEN");
 
-    const results = await approveAndSendMany(h.ctx, s.agent, [
+    const results = await sendMany(h.ctx, s.agent, [
       ...ready.map((i) => ({ draftId: i.draftId!, expectedVersion: i.version! })),
       ...notReady.filter((i) => i.draftId).map((i) => ({ draftId: i.draftId!, expectedVersion: i.version! })),
     ]);
     for (const i of ready) assert.ok(results.find((r) => r.draftId === i.draftId)?.ok, JSON.stringify(results));
     for (const i of notReady.filter((x) => x.draftId)) {
-      assert.equal(results.find((r) => r.draftId === i.draftId)?.ok, false, "not offered, not approved in bulk");
+      assert.equal(results.find((r) => r.draftId === i.draftId)?.ok, false, "not offered, not sent in bulk");
       assert.equal(await one(h.ctx.db, "SELECT 1 FROM approvals WHERE draft_id = $1", [i.draftId]), null, "no approval left behind");
     }
     if (ready[0]) {
       assert.ok(await one(h.ctx.db, "SELECT 1 FROM outbox WHERE conversation_id = $1", [ready[0].conversationId]));
-      const again = await approveAndSendMany(h.ctx, s.agent, [{ draftId: ready[0].draftId!, expectedVersion: ready[0].version! }]);
+      const again = await sendMany(h.ctx, s.agent, [{ draftId: ready[0].draftId!, expectedVersion: ready[0].version! }]);
       assert.equal(again[0]!.ok, false);
     }
   });

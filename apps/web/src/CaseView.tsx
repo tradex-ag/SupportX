@@ -146,7 +146,6 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
   const c = data.conversation;
   const match = MATCH_LABEL[c.order_match_status] ?? { label: c.order_match_status, tone: "muted" as const };
   const draft = data.drafts.find((d) => d.status === "proposed" || d.status === "edited") ?? null;
-  const approval = draft ? data.approvals.find((a) => a.draft_id === draft.id && a.draft_version === draft.version && !a.invalidated_at && new Date(a.expires_at) > new Date()) : undefined;
 
   const due = deadlineState(c.waiting_since, c.reply_hours);
   const sender = data.messages.find((m) => m.direction === "inbound")?.from_address ?? c.customer_address ?? "";
@@ -275,13 +274,13 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 onDecide={(decision) => act(() => api("POST", `${base}/cases/${caseId}/redraft`, { decision }), "Die Antwort wird geschrieben. Sie erscheint hier in wenigen Sekunden.")}
                 invoices={data.invoices ?? []}
                 orderUnique={c.order_match_status === "unique"}
-                onInvoice={() => act(() => api("POST", `${base}/cases/${caseId}/invoice-reply`), data.replyFiles?.supported ? "Rechnung aus weclapp angehängt. Bitte lesen, freigeben und senden." : "Rechnung aus weclapp geholt. Dieser Kanal nimmt keine Dateien an, siehe Hinweis.")}
+                onInvoice={() => act(() => api("POST", `${base}/cases/${caseId}/invoice-reply`), data.replyFiles?.supported ? "Rechnung aus weclapp angehängt. Bitte lesen und senden." : "Rechnung aus weclapp geholt. Dieser Kanal nimmt keine Dateien an, siehe Hinweis.")}
                 snippets={snippets}
                 onSnippet={(snippetId) => act(() => api<{ missing: string[] }>("POST", `${base}/cases/${caseId}/snippet-reply`, { snippetId }), (r) => {
                   const missing = (r as { missing: string[] }).missing;
-                  return missing.length ? `Textbaustein übernommen. Ohne Wert geblieben: ${missing.map((m) => `{${m}}`).join(", ")}. Bitte im Entwurf ausfüllen.` : "Textbaustein übernommen. Bitte lesen und freigeben.";
+                  return missing.length ? `Textbaustein übernommen. Ohne Wert geblieben: ${missing.map((m) => `{${m}}`).join(", ")}. Bitte im Entwurf ausfüllen.` : "Textbaustein übernommen. Bitte lesen und senden.";
                 })}
-                onCompose={(instruction) => act(() => api("POST", `${base}/cases/${caseId}/compose`, { instruction }), (data.writer ?? "rules") !== "rules" ? "Ausformuliert. Bitte noch einmal lesen und dann freigeben." : "Als Antwort übernommen. Bitte noch einmal lesen und dann freigeben.")}
+                onCompose={(instruction) => act(() => api("POST", `${base}/cases/${caseId}/compose`, { instruction }), (data.writer ?? "rules") !== "rules" ? "Ausformuliert. Bitte noch einmal lesen und dann senden." : "Als Antwort übernommen. Bitte noch einmal lesen und dann senden.")}
               />
             )}
             {!draft ? null : (
@@ -292,11 +291,9 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 renderSnippet={(snippetId) => api<{ text: string; missing: string[] }>("GET", `${base}/cases/${caseId}/snippets/${snippetId}`)}
                 onEditing={setEditing}
                 canEdit={canEdit}
-                approval={approval}
                 send={data.send}
-                onSave={(body) => act(() => api("PUT", `${base}/drafts/${draft.id}`, { body, expectedVersion: draft.version }), "Entwurf gespeichert. Eine frühere Freigabe ist damit ungültig.")}
-                onApprove={(ack) => act(() => api("POST", `${base}/drafts/${draft.id}/approve`, { expectedVersion: draft.version, acknowledgeWarnings: ack }), "Freigegeben.")}
-                onSend={(approvalId) => act(() => api("POST", `${base}/approvals/${approvalId}/send`), "In den Postausgang gestellt.")}
+                onSave={(body) => act(() => api("PUT", `${base}/drafts/${draft.id}`, { body, expectedVersion: draft.version }), "Entwurf gespeichert.")}
+                onSend={(ack) => act(() => api("POST", `${base}/drafts/${draft.id}/send`, { expectedVersion: draft.version, acknowledgeWarnings: ack }), "In den Postausgang gestellt.")}
                 onDiscard={() => act(() => api("POST", `${base}/drafts/${draft.id}/discard`))}
                 canPolish={(data.writer ?? "rules") !== "rules"}
                 onPolish={(body) => act(() => api("POST", `${base}/drafts/${draft.id}/polish`, { body, expectedVersion: draft.version }), "Neu formuliert und gespeichert. Bitte noch einmal lesen.")}
@@ -304,8 +301,8 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 caseFiles={data.caseFiles ?? []}
                 replyFiles={data.replyFiles ?? { supported: false, note: "" }}
                 documentBase={`${base}/documents`}
-                onUpload={(file) => act(async () => api("POST", `${base}/drafts/${draft.id}/files`, { name: file.name, dataBase64: await readBase64(file), expectedVersion: draft.version }), "Datei angehängt. Bitte Antwort mit Anhang freigeben.")}
-                onDocuments={(ids) => act(() => api("PUT", `${base}/drafts/${draft.id}/documents`, { documentIds: ids, expectedVersion: draft.version }), ids.length ? "Anhang gespeichert. Bitte Antwort mit Anhang freigeben." : "Anhang entfernt.")}
+                onUpload={(file) => act(async () => api("POST", `${base}/drafts/${draft.id}/files`, { name: file.name, dataBase64: await readBase64(file), expectedVersion: draft.version }), "Datei angehängt. Bitte Antwort mit Anhang lesen und senden.")}
+                onDocuments={(ids) => act(() => api("PUT", `${base}/drafts/${draft.id}/documents`, { documentIds: ids, expectedVersion: draft.version }), ids.length ? "Anhang gespeichert. Bitte Antwort mit Anhang lesen und senden." : "Anhang entfernt.")}
               />
             )}
           </section>
@@ -318,7 +315,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               data={data}
               canEdit={canEdit}
               onLink={(body) => act(() => api("POST", `${base}/cases/${caseId}/order-link`, body), "Zuordnung aktualisiert.")}
-              onRefresh={() => act(() => api<{ changed: boolean }>("POST", `${base}/cases/${caseId}/order-refresh`), (r) => (r as { changed: boolean }).changed ? "Bestellung neu aus weclapp abgerufen. Es hat sich etwas geändert; eine frühere Freigabe ist damit ungültig." : "Bestellung neu aus weclapp abgerufen. Unverändert.")}
+              onRefresh={() => act(() => api<{ changed: boolean }>("POST", `${base}/cases/${caseId}/order-refresh`), (r) => (r as { changed: boolean }).changed ? "Bestellung neu aus weclapp abgerufen. Es hat sich etwas geändert; bitte den Entwurf noch einmal lesen." : "Bestellung neu aus weclapp abgerufen. Unverändert.")}
               invoiceFiles={(data.caseFiles ?? []).filter((f) => f.source === "erp_invoice")}
               documentBase={`${base}/documents`}
               draft={draft}
@@ -328,7 +325,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 // Start the download right away; the file also stays in the list.
                 for (const f of r.files) { const a = document.createElement("a"); a.href = `${base}/documents/${f.id}`; a.download = f.name; a.click(); }
               }, "Rechnung aus weclapp geholt.")}
-              onAttach={(fileId, on) => draft && act(() => api("PUT", `${base}/drafts/${draft.id}/documents`, { documentIds: on ? [...(draft.document_ids ?? []), fileId] : (draft.document_ids ?? []).filter((x) => x !== fileId), expectedVersion: draft.version }), on ? "Rechnung wird mit der Antwort gesendet. Bitte Antwort freigeben." : "Rechnung aus der Antwort genommen.")}
+              onAttach={(fileId, on) => draft && act(() => api("PUT", `${base}/drafts/${draft.id}/documents`, { documentIds: on ? [...(draft.document_ids ?? []), fileId] : (draft.document_ids ?? []).filter((x) => x !== fileId), expectedVersion: draft.version }), on ? "Rechnung wird mit der Antwort gesendet. Bitte Antwort lesen und senden." : "Rechnung aus der Antwort genommen.")}
             />
           </section>
 
@@ -929,7 +926,7 @@ function Decision({ current, hasDraft, writer, pendingOrder, invoices, orderUniq
           className={current === "invoice" ? "primary" : ""}
           disabled={fetching}
           onClick={async () => { setFetching(true); try { await onInvoice(); } finally { setFetching(false); } }}
-          title="Holt die Rechnungs-PDF der zugeordneten Bestellung aus weclapp und hängt sie an eine Antwort aus der Vorlage (ohne KI-Kosten). Gesendet wird erst nach Freigabe und Klick auf Senden."
+          title="Holt die Rechnungs-PDF der zugeordneten Bestellung aus weclapp und hängt sie an eine Antwort aus der Vorlage (ohne KI-Kosten). Gesendet wird erst mit Klick auf Senden."
         >{fetching ? "Holt Rechnung …" : "Rechnung senden"}</button>
         {snippets.length > 0 && (
           <span className="snippet-pick">
@@ -961,11 +958,11 @@ function Decision({ current, hasDraft, writer, pendingOrder, invoices, orderUniq
 
 function DraftEditor(props: {
   snippets: SnippetInfo[]; renderSnippet: (snippetId: string) => Promise<{ text: string; missing: string[] }>; onEditing: (editing: boolean) => void;
-  draft: Draft; canEdit: boolean; approval: CaseData["approvals"][number] | undefined; send: CaseData["send"];
-  onSave: (body: string) => void; onApprove: (ack: boolean) => void; onSend: (approvalId: string) => void; onDiscard: () => void; canPolish: boolean; onPolish: (body: string) => void;
+  draft: Draft; canEdit: boolean; send: CaseData["send"];
+  onSave: (body: string) => void; onSend: (ack: boolean) => void; onDiscard: () => void; canPolish: boolean; onPolish: (body: string) => void;
   documents: DocumentInfo[]; caseFiles: CaseFile[]; replyFiles: { supported: boolean; note: string }; documentBase: string; onDocuments: (ids: string[]) => void; onUpload: (file: File) => void;
 }) {
-  const { draft, canEdit, approval, send } = props;
+  const { draft, canEdit, send } = props;
   const notice = sendNotice(send);
   const [body, setBody] = useState(draft.body);
   const [ack, setAck] = useState(false);
@@ -1027,17 +1024,8 @@ function DraftEditor(props: {
           {props.canPolish && <button onClick={() => { setPolishing(true); props.onPolish(body); }} disabled={polishing || !body.trim()} title="Formuliert deinen Text freundlich und kundenorientiert (Claude, kostet Guthaben)">{polishing ? "Formuliert …" : "Freundlich formulieren"}</button>}
           <button className="ghost danger" onClick={props.onDiscard}>Verwerfen</button>
           <span className="spacer" />
-          {!approval ? (
-            <>
-              {warnings.length > 0 && <label className="small"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> Hinweise geprüft</label>}
-              <button className="primary" disabled={dirty || blocking.length > 0 || (warnings.length > 0 && !ack)} onClick={() => props.onApprove(ack)} title={dirty ? "Erst speichern" : undefined}>Freigeben</button>
-            </>
-          ) : (
-            <>
-              <span className="pill ok">Freigegeben, gültig bis {fmtDate(approval.expires_at)}</span>
-              <button className="primary" disabled={!send.allowed || dirty} onClick={() => props.onSend(approval.id)}>Senden</button>
-            </>
-          )}
+          {warnings.length > 0 && <label className="small"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> Hinweise geprüft</label>}
+          <button className="primary" disabled={!send.allowed || dirty || blocking.length > 0 || (warnings.length > 0 && !ack)} onClick={() => props.onSend(ack)} title={dirty ? "Erst speichern" : undefined}>Senden</button>
         </div>
       )}
       {notice.status && <p className="small"><span className={`pill ${notice.status.tone}`}>{notice.status.text}</span></p>}

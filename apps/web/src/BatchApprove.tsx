@@ -6,7 +6,7 @@ interface Item {
   draftId: string | null; version: number | null; body: string | null; ready: boolean; reasons: string[];
 }
 
-/** Read several ready replies on one page and approve them at once. */
+/** Read several ready replies on one page and send them at once. */
 export function BatchApprove({ workspaceId, ids, onDone, onOpen, onClear }: { workspaceId: string; ids: string[]; onDone: () => void; onOpen: (id: string) => void; onClear: () => void }) {
   const base = `/api/w/${workspaceId}`;
   const [items, setItems] = useState<Item[] | null>(null);
@@ -26,7 +26,7 @@ export function BatchApprove({ workspaceId, ids, onDone, onOpen, onClear }: { wo
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ results: Array<{ draftId: string; ok: boolean; error?: string }> }>("POST", `${base}/batch/approve-send`, { items: ready.map((i) => ({ draftId: i.draftId, expectedVersion: i.version })) });
+      const r = await api<{ results: Array<{ draftId: string; ok: boolean; error?: string }> }>("POST", `${base}/batch/send`, { items: ready.map((i) => ({ draftId: i.draftId, expectedVersion: i.version })) });
       setResults(Object.fromEntries(r.results.map((x) => [x.draftId, x.ok ? "ok" : x.error ?? "Fehler"])));
       onDone();
     } catch (err) {
@@ -41,12 +41,12 @@ export function BatchApprove({ workspaceId, ids, onDone, onOpen, onClear }: { wo
     <div className="case batch">
       <div className="case-head">
         <h2>{ids.length === 1 ? "1 Antwort ausgewählt" : `${ids.length} Antworten ausgewählt`}</h2>
-        <p className="muted small">Bitte jede Antwort lesen. Freigegeben wird genau der Text, der hier steht. Entwürfe mit Hinweisen werden nur einzeln im Fall freigegeben.</p>
+        <p className="muted small">Bitte jede Antwort lesen. Gesendet wird genau der Text, der hier steht. Entwürfe mit Hinweisen werden nur einzeln im Fall gesendet.</p>
         <div className="row wrap">
-          {!results && <button className="primary" disabled={busy || ready.length === 0} onClick={send}>{busy ? "Wird gesendet …" : ready.length === 0 ? "Keine davon gemeinsam freigebbar" : ready.length === 1 ? "1 Antwort freigeben und senden" : `${ready.length} Antworten freigeben und senden`}</button>}
+          {!results && <button className="primary" disabled={busy || ready.length === 0} onClick={send}>{busy ? "Wird gesendet …" : ready.length === 0 ? "Keine davon gemeinsam sendbar" : ready.length === 1 ? "1 Antwort senden" : `${ready.length} Antworten senden`}</button>}
           <button onClick={onClear}>{results ? "Fertig" : "Auswahl aufheben"}</button>
         </div>
-        {results && <p className={sentCount === ready.length ? "notice ok" : "notice bad"}>{sentCount} von {ready.length} freigegeben und zum Senden übergeben.</p>}
+        {results && <p className={sentCount === ready.length ? "notice ok" : "notice bad"}>{sentCount} von {ready.length} zum Senden übergeben.</p>}
         {error && <p className="notice bad">{error}</p>}
       </div>
       {items.map((i) => {
@@ -59,7 +59,7 @@ export function BatchApprove({ workspaceId, ids, onDone, onOpen, onClear }: { wo
             </div>
             {i.body && <pre className="body">{i.body}</pre>}
             {i.reasons.length > 0 && <p className="state warn small">Nicht dabei: {i.reasons.join(" ")}</p>}
-            {result && <p className={result === "ok" ? "state ok small" : "state bad small"}>{result === "ok" ? "Freigegeben und zum Senden übergeben." : result}</p>}
+            {result && <p className={result === "ok" ? "state ok small" : "state bad small"}>{result === "ok" ? "Zum Senden übergeben." : result}</p>}
           </section>
         );
       })}

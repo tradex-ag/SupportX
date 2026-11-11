@@ -1,7 +1,7 @@
 import type { DraftIssue } from "../core/draft-check.ts";
-import { many, one } from "../storage/db.ts";
+import { many } from "../storage/db.ts";
 import { requireRole, ServiceError, type Actor, type AppContext } from "./context.ts";
-import { approveDraft, queueReply, sendBlockers } from "./replies.ts";
+import { sendBlockers, sendDraft } from "./replies.ts";
 
 const UUID = /^[0-9a-f-]{36}$/i;
 
@@ -13,7 +13,7 @@ export const BATCH_MAX = 50;
 
 /**
  * Several ready replies on one page: the current draft of each chosen case with its
- * text, so a person reads them before approving all at once. A draft with any hint,
+ * text, so a person reads them before sending all at once. A draft with any hint,
  * a newer customer message or a closed send route is shown but not offered.
  */
 export async function batchCandidates(ctx: AppContext, actor: Actor, conversationIds: ReadonlyArray<string>): Promise<BatchItem[]> {
@@ -45,10 +45,10 @@ export async function batchCandidates(ctx: AppContext, actor: Actor, conversatio
 }
 
 /**
- * Approves and sends the drafts the person read, each bound to the version shown.
+ * Sends the drafts the person read, each bound to the version shown.
  * Only drafts without hints (no blanket acknowledgement); one failure does not stop the others.
  */
-export async function approveAndSendMany(ctx: AppContext, actor: Actor, items: ReadonlyArray<{ draftId: string; expectedVersion: number }>) {
+export async function sendMany(ctx: AppContext, actor: Actor, items: ReadonlyArray<{ draftId: string; expectedVersion: number }>) {
   requireRole(actor, ["owner", "agent"]);
   if (!Array.isArray(items) || items.length === 0) throw new ServiceError(400, "INVALID", "Keine Entwürfe ausgewählt.");
   if (items.length > BATCH_MAX) throw new ServiceError(400, "INVALID", `Höchstens ${BATCH_MAX} Entwürfe auf einmal.`);
@@ -56,13 +56,7 @@ export async function approveAndSendMany(ctx: AppContext, actor: Actor, items: R
   for (const item of items) {
     try {
       if (!UUID.test(String(item.draftId)) || !Number.isInteger(item.expectedVersion)) throw new ServiceError(400, "INVALID", "Ungültiger Entwurf.");
-      // Check the send route first, so a draft that cannot go out is not approved either.
-      const draft = await one<{ conversation_id: string }>(ctx.db, "SELECT conversation_id FROM drafts WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, item.draftId]);
-      if (!draft) throw new ServiceError(404, "NOT_FOUND", "Entwurf nicht gefunden.");
-      const send = await sendBlockers(ctx, ctx.db, actor.workspaceId, draft.conversation_id);
-      if (!send.allowed) throw new ServiceError(409, "SEND_BLOCKED", send.blockers.join(" "));
-      const approvalId = await approveDraft(ctx, actor, item.draftId, { expectedVersion: item.expectedVersion, acknowledgeWarnings: false });
-      await queueReply(ctx, actor, approvalId);
+      await sendDraft(ctx, actor, item.draftId, { expectedVersion: item.expectedVersion, acknowledgeWarnings: false });
       results.push({ draftId: item.draftId, ok: true });
     } catch (err) {
       results.push({ draftId: String(item.draftId), ok: false, error: err instanceof ServiceError ? err.message : "Unerwarteter Fehler." });
