@@ -281,3 +281,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1
 .design-live { border-left: 3px solid var(--signal); padding: 6px 10px; background: var(--bg); }
 .design-logo { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
 .logo-preview { max-height: 48px; max-width: 240px; object-fit: contain; display: block; margin-bottom: 8px; }
+
+/* Refund due: goods are back in weclapp and no refund is recorded yet. Red as the one signal on the card. */
+.refund-due-notice { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; padding: 8px 12px; background: var(--bad-bg); color: var(--bad); border-left: 3px solid var(--signal); border-radius: var(--radius); }
+a.button.refund-due { background: var(--signal); border-color: var(--signal); color: #fff; box-shadow: 0 0 0 3px var(--bad-bg); }
+a.button.refund-due:hover { background: var(--bad); border-color: var(--bad); }
+.refund-flag { font-family: var(--mono); font-size: 11px; padding: 0 6px; background: var(--signal); color: #fff; border-radius: var(--radius); white-space: nowrap; }
