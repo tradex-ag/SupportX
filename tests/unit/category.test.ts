@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { OWN_COPY_REASON, categorizeMail } from "../../packages/core/category.ts";
+import { OWN_COPY_REASON, SYSTEM_NOTICE_REASON, categorizeMail, systemNoticeOf } from "../../packages/core/category.ts";
 
 const mail = (over: Partial<Parameters<typeof categorizeMail>[0]> = {}) => ({
   from: { address: "kunde@example.invalid" }, subject: "Frage", bodyText: "Hallo", headers: {}, hasOrderReference: false, ...over,
@@ -51,5 +51,31 @@ describe("own copies from Amazon", () => {
   it("keeps a real buyer message a request", () => {
     const d = categorizeMail({ from: { address: "kunde@marketplace.amazon.de" }, subject: "Frage zur Bestellung", bodyText: "Ich habe eine Kopie der Rechnung gebraucht, die Sie mir gesendet haben.", headers: {}, hasOrderReference: true });
     assert.equal(d.category, "support");
+  });
+});
+
+describe("marketplace system notices", () => {
+  it("files seller notices from the bare amazon domain as info, despite order number and refund words", () => {
+    for (const [address, subject] of [
+      ["donotreply@amazon.com", "Dein SAFE-T-Antrag 10000-20000-3000000 wurde für die Bestellung 302-0000000-0000001 eingereicht"],
+      ["seller-notification@amazon.de", "Benachrichtigung zur Rücksendegenehmigung für die Bestellung 302-0000000-0000002"],
+      ["seller-notification@amazon.de", "9.99 EUR Rückerstattung veranlasst – Bestellung 302-0000000-0000003"],
+    ] as const) {
+      const d = categorizeMail(mail({ from: { address }, subject, bodyText: "Wir haben eine Rückerstattung veranlasst. Rücksendung: ja", hasOrderReference: true }));
+      assert.equal(d.category, "info", subject);
+      assert.equal(d.reason, SYSTEM_NOTICE_REASON);
+    }
+  });
+
+  it("keeps buyer mails relayed by the marketplace and claims against us as requests", () => {
+    assert.equal(systemNoticeOf({ from: { address: "abc123@marketplace.amazon.de" }, subject: "Frage zur Bestellung" }), null);
+    assert.equal(categorizeMail(mail({ from: { address: "abc123@marketplace.amazon.de" }, subject: "Rücksendung", hasOrderReference: true })).category, "support");
+    assert.equal(systemNoticeOf({ from: { address: "atoz-guarantee-no-reply@amazon.de" }, subject: "A-bis-z-Garantieantrag für Bestellung 302-0000000-0000004" }), null);
+    assert.equal(systemNoticeOf({ from: { address: "x@notamazon.de" }, subject: "Hinweis" }), null);
+  });
+
+  it("lets an operator rule overrule the built-in notice detection", () => {
+    const rules = [{ matchType: "from_address" as const, pattern: "donotreply@amazon.com", category: "support" as const }];
+    assert.equal(categorizeMail(mail({ from: { address: "donotreply@amazon.com" }, subject: "Hinweis" }), rules).category, "support");
   });
 });
