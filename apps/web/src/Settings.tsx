@@ -23,7 +23,7 @@ interface SettingsData {
   workspace: { name: string; auto_invoice?: "off" | "draft" | "send"; reply_signature: string; reply_tone: string; allowed_link_prefixes: string[]; ai_enabled: boolean; has_ai_key: boolean; ai_key_hint: string | null; setup_confirmations: Record<string, { at: string; by: string | null }>; reply_deadlines?: Record<string, number>; automations?: Record<string, { mode: "off" | "draft" | "send"; since: string | null }> };
   accounts: Account[]; connections: Connection[]; rules: Rule[]; routes: Route[];
   erp: null | { base_url: string; search_fields: string[]; has_secret: boolean; status: string; last_checked_at: string | null; last_error: string | null };
-  categoryRules: Array<{ id: string; match_type: string; pattern: string; category: "support" | "info" }>;
+  categoryRules: Array<{ id: string; match_type: string; pattern: string; category: "support" | "info"; hits: number; last_hit_at: string | null }>;
   jobs: Array<{ type: string; status: string; count: number; last_error: string | null }>;
   catalog: Descriptor[]; ai: { provider: string; model: string; promptVersion: string }; sendMode: string; demoMode: boolean;
 }
@@ -151,14 +151,15 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
       )}
       <section className="card">
         <h3>Werbung erkennen</h3>
-        <p className="muted">Newsletter, Aktionen und Partner-Infos erkennt SupportX selbst und legt sie unter „Werbung &amp; Infos“ ab, ohne Antwortentwurf. Liegt es einmal daneben, im Fall umschalten und dabei „Alle von …“ wählen. Das merkt sich SupportX hier.</p>
-        {data.categoryRules.length === 0 ? <p className="small muted">Noch keine eigenen Absender-Regeln.</p> : (
+        <p className="muted">Newsletter, Aktionen und Partner-Infos erkennt SupportX selbst und legt sie unter „Werbung &amp; Infos“ ab, ohne Antwortentwurf. Liegt es einmal daneben, im Fall umschalten und dabei „Alle mit diesem Betreff-Muster“ oder „Alle von …“ wählen. Das merkt sich SupportX hier. Im Betreff-Muster steht * für Beträge, Nummern und andere wechselnde Teile.</p>
+        {data.categoryRules.length === 0 ? <p className="small muted">Noch keine eigenen Regeln.</p> : (
           <table>
-            <thead><tr><th>Absender</th><th>immer als</th><th /></tr></thead>
+            <thead><tr><th>Betreff oder Absender</th><th>immer als</th><th>Treffer</th><th /></tr></thead>
             <tbody>{data.categoryRules.map((r) => (
               <tr key={r.id}>
-                <td><code>{r.match_type === "from_domain" ? `@${r.pattern}` : r.pattern}</code></td>
+                <td>{r.match_type === "subject_pattern" ? <><span className="small muted">Betreff </span><code>{r.pattern}</code></> : <code>{r.match_type === "from_domain" ? `@${r.pattern}` : r.pattern}</code>}</td>
                 <td>{r.category === "info" ? "Werbung/Info" : "Kundenanfrage"}</td>
+                <td title={r.last_hit_at ? `zuletzt ${fmtDate(r.last_hit_at)}` : "noch kein Treffer"}>{r.hits ?? 0}</td>
                 <td>{owner && <button className="link" onClick={() => act(() => api("DELETE", `${base}/category-rules/${r.id}`), () => "Regel entfernt.")}>entfernen</button>}</td>
               </tr>
             ))}</tbody>

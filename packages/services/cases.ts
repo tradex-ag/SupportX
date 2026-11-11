@@ -7,7 +7,9 @@ import { actorId, requireRole, ServiceError, type Actor, type AppContext } from 
 import { aiWriter, sendBlockers, titleHintsFor } from "./replies.ts";
 import { listCaseFiles, REPLY_FILES } from "./documents.ts";
 import { invoiceSummary } from "./invoices.ts";
-import { OWN_COPY_REASON, SYSTEM_NOTICE_REASON, ownCopyText } from "../core/category.ts";
+import { OWN_COPY_REASON, SYSTEM_NOTICE_REASON, ownCopyText, ruleReason } from "../core/category.ts";
+import { checkSubjectPattern, matchesSubjectPattern } from "../core/subject-pattern.ts";
+import type { Queryable } from "../storage/db.ts";
 import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { deadlineState, MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
@@ -216,34 +218,105 @@ export async function caseCounts(ctx: AppContext, actor: Actor) {
   return { ...counts!, urgent };
 }
 
+type Category = "support" | "info";
+type Remember = "none" | "address" | "domain" | "subject";
+
+interface PatternCandidate { id: string; subject: string; category: Category; movable: boolean }
+
+/** Cases whose subject follows the pattern. Movable: no person decided it and nothing was sent yet. */
+async function casesWithSubjectPattern(q: Queryable, workspaceId: string, pattern: string): Promise<PatternCandidate[]> {
+  const rows = await many<{ id: string; subject: string; category: Category; category_source: string; sent: boolean }>(
+    q,
+    `SELECT c.id, c.subject, c.category, c.category_source,
+            EXISTS (SELECT 1 FROM outbox o WHERE o.workspace_id = c.workspace_id AND o.conversation_id = c.id) AS sent
+       FROM conversations c WHERE c.workspace_id = $1 ORDER BY c.last_message_at DESC NULLS LAST LIMIT 20000`,
+    [workspaceId],
+  );
+  return rows
+    .filter((r) => matchesSubjectPattern(pattern, r.subject))
+    .map((r) => ({ id: r.id, subject: r.subject, category: r.category, movable: r.category_source !== "person" && !r.sent }));
+}
+
+export interface SubjectPatternPreview {
+  pattern: string;
+  valid: boolean;
+  error?: string;
+  /** Existing cases with this subject pattern. */
+  matching: number;
+  /** Of those, cases that would be re-sorted now (others are already sorted so, decided by a person or answered). */
+  moving: number;
+  examples: Array<{ id: string; subject: string; category: Category }>;
+}
+
+/** What a subject rule would catch, before anyone saves it. */
+export async function previewSubjectPattern(ctx: AppContext, actor: Actor, input: { pattern: string; category: Category }): Promise<SubjectPatternPreview> {
+  requireRole(actor, ["owner", "agent"]);
+  const checked = checkSubjectPattern(input.pattern);
+  if (!checked.ok) return { pattern: input.pattern, valid: false, error: checked.error, matching: 0, moving: 0, examples: [] };
+  const hits = await casesWithSubjectPattern(ctx.db, actor.workspaceId, checked.pattern);
+  const moving = hits.filter((h) => h.movable && h.category !== input.category);
+  // Show first what would change, then the rest.
+  const examples = [...moving, ...hits.filter((h) => !moving.includes(h))].slice(0, 5).map(({ id, subject, category }) => ({ id, subject, category }));
+  return { pattern: checked.pattern, valid: true, matching: hits.length, moving: moving.length, examples };
+}
+
+async function moveCase(tx: Queryable, workspaceId: string, conversationId: string, category: Category, source: "person" | "rule", reason: string, previous: string): Promise<void> {
+  await tx.query(
+    `UPDATE conversations SET category = $3, category_source = $4, category_reason = $5, version = version + 1, updated_at = now() WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, conversationId, category, source, reason.slice(0, 500)],
+  );
+  if (category === "info") {
+    await tx.query("UPDATE approvals SET invalidated_at = now(), invalidation_reason = 'als Werbung/Info eingeordnet' WHERE workspace_id = $1 AND conversation_id = $2 AND invalidated_at IS NULL", [workspaceId, conversationId]);
+    await tx.query("UPDATE drafts SET status = 'superseded', updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND status IN ('proposed','edited')", [workspaceId, conversationId]);
+  } else if (previous !== "support") {
+    await enqueue(tx, { workspaceId, type: "case.enrich", payload: { conversationId }, dedupeKey: `case.enrich:${conversationId}` });
+  }
+}
+
 /**
  * A person decides: customer request or information/advertising. Optionally remembered
- * for the sender's address or domain, so future mails from there are sorted the same way.
+ * for the sender's address or domain, or for a subject pattern, so future mails are
+ * sorted the same way. A subject rule also re-sorts existing cases with that pattern
+ * (not those a person decided or that were already answered).
  */
 export async function setCaseCategory(
   ctx: AppContext,
   actor: Actor,
   conversationId: string,
-  input: { category: "support" | "info"; remember?: "none" | "address" | "domain" },
-): Promise<void> {
+  input: { category: Category; remember?: Remember; pattern?: string },
+): Promise<{ moved: number }> {
   requireRole(actor, ["owner", "agent"]);
   assertId(conversationId);
   if (!["support", "info"].includes(input.category)) throw new ServiceError(400, "INVALID", "Ungültige Einordnung.");
-  await withTx(ctx.db, async (tx) => {
+  let subjectPattern: string | null = null;
+  if (input.remember === "subject") {
+    const checked = checkSubjectPattern(input.pattern ?? "");
+    if (!checked.ok) throw new ServiceError(400, "INVALID", checked.error);
+    subjectPattern = checked.pattern;
+  }
+  return withTx(ctx.db, async (tx) => {
     const conv = await one<{ id: string; customer_address: string | null; category: string }>(tx, "SELECT id, customer_address, category FROM conversations WHERE workspace_id = $1 AND id = $2 FOR UPDATE", [actor.workspaceId, conversationId]);
     if (!conv) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
     const sender = (await one<{ from_address: string }>(tx, "SELECT from_address FROM messages WHERE workspace_id = $1 AND conversation_id = $2 AND direction = 'inbound' ORDER BY received_at DESC LIMIT 1", [actor.workspaceId, conversationId]))?.from_address.toLowerCase();
-    await tx.query(
-      "UPDATE conversations SET category = $3, category_source = 'person', category_reason = 'von Hand eingeordnet', version = version + 1, updated_at = now() WHERE workspace_id = $1 AND id = $2",
-      [actor.workspaceId, conversationId, input.category],
-    );
-    if (input.category === "info") {
-      await tx.query("UPDATE approvals SET invalidated_at = now(), invalidation_reason = 'als Werbung/Info eingeordnet' WHERE workspace_id = $1 AND conversation_id = $2 AND invalidated_at IS NULL", [actor.workspaceId, conversationId]);
-      await tx.query("UPDATE drafts SET status = 'superseded', updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND status IN ('proposed','edited')", [actor.workspaceId, conversationId]);
-    } else if (conv.category !== "support") {
-      await enqueue(tx, { workspaceId: actor.workspaceId, type: "case.enrich", payload: { conversationId }, dedupeKey: `case.enrich:${conversationId}` });
-    }
-    if (sender && input.remember && input.remember !== "none") {
+    await moveCase(tx, actor.workspaceId, conversationId, input.category, "person", "von Hand eingeordnet", conv.category);
+    let moved = 0;
+    if (subjectPattern) {
+      const rule = await one<{ id: string }>(
+        tx,
+        `INSERT INTO category_rules (workspace_id, match_type, pattern, category, created_by) VALUES ($1, 'subject_pattern', $2, $3, $4)
+         ON CONFLICT (workspace_id, match_type, pattern) DO UPDATE SET category = EXCLUDED.category RETURNING id`,
+        [actor.workspaceId, subjectPattern, input.category, actor.type === "user" ? actor.userId : null],
+      );
+      const reason = ruleReason({ matchType: "subject_pattern", pattern: subjectPattern });
+      for (const c of await casesWithSubjectPattern(tx, actor.workspaceId, subjectPattern)) {
+        if (c.id === conversationId || !c.movable || c.category === input.category) continue;
+        await tx.query("SELECT 1 FROM conversations WHERE workspace_id = $1 AND id = $2 FOR UPDATE", [actor.workspaceId, c.id]);
+        await moveCase(tx, actor.workspaceId, c.id, input.category, "rule", reason, c.category);
+        moved++;
+      }
+      // The case itself and the re-sorted ones count as hits of the new rule.
+      await tx.query("UPDATE category_rules SET hits = hits + $3, last_hit_at = now() WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, rule!.id, moved + 1]);
+    } else if (sender && input.remember && input.remember !== "none") {
       const matchType = input.remember === "address" ? "from_address" : "from_domain";
       const pattern = input.remember === "address" ? sender : sender.slice(sender.lastIndexOf("@") + 1);
       await tx.query(
@@ -252,7 +325,8 @@ export async function setCaseCategory(
         [actor.workspaceId, matchType, pattern, input.category, actor.type === "user" ? actor.userId : null],
       );
     }
-    await audit(tx, actor, "conversation.categorized", "conversation", conversationId, { category: input.category, remember: input.remember ?? "none" });
+    await audit(tx, actor, "conversation.categorized", "conversation", conversationId, { category: input.category, remember: input.remember ?? "none", ...(subjectPattern ? { pattern: subjectPattern, moved } : {}) });
+    return { moved };
   });
 }
 
@@ -420,7 +494,7 @@ export async function getSettings(ctx: AppContext, actor: Actor) {
     many(ctx.db, "SELECT r.id, r.connection_id, r.priority, r.match_type, r.pattern, r.source_platform, r.merchant_account_id, ma.name AS merchant_account_name FROM routing_rules r LEFT JOIN merchant_accounts ma ON ma.id = r.merchant_account_id WHERE r.workspace_id = $1 ORDER BY r.priority, r.pattern", [ws]),
     many(ctx.db, "SELECT v.id, v.connection_id, v.source_platform, v.evidence_note, v.verified_at, u.display_name AS verified_by FROM reply_route_verifications v LEFT JOIN users u ON u.id = v.verified_by WHERE v.workspace_id = $1 AND v.revoked_at IS NULL", [ws]),
     one(ctx.db, "SELECT id, base_url, search_fields, secret_id IS NOT NULL AS has_secret, status, last_checked_at, last_error FROM erp_connections WHERE workspace_id = $1", [ws]),
-    many(ctx.db, "SELECT id, match_type, pattern, category, created_at FROM category_rules WHERE workspace_id = $1 ORDER BY pattern", [ws]),
+    many(ctx.db, "SELECT id, match_type, pattern, category, hits, last_hit_at, created_at FROM category_rules WHERE workspace_id = $1 ORDER BY match_type DESC, pattern", [ws]),
     many(ctx.db, "SELECT type, status, count(*)::int AS count, max(last_error) AS last_error FROM jobs WHERE workspace_id = $1 AND (status IN ('queued','running','failed')) GROUP BY type, status ORDER BY type", [ws]),
   ]);
   return {

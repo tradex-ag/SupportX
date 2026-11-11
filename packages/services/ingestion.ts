@@ -200,6 +200,9 @@ export async function ingestMessage(tx: Tx, connection: ChannelConnectionRow, ru
   // Marketplace channels (eBay, Kaufland, Mirakl) carry only buyer/operator messages, no newsletters: always a request.
   if (kind === "customer" && conversation.category_source !== "person" && connection.kind === "microsoft_graph") {
     const decision = categorizeMail({ from: message.from, subject: message.subject, bodyText: latestText, headers: message.headers, hasOrderReference: found.length > 0 }, categoryRules);
+    if (decision.ruleId) {
+      await tx.query("UPDATE category_rules SET hits = hits + 1, last_hit_at = now() WHERE workspace_id = $1 AND id = $2", [ws, decision.ruleId]);
+    }
     // Once a thread is a request, a later newsletter-looking mail in it does not demote it.
     if (decision.category === "support" || conversation.category === "info" || conversation.version <= 1) {
       category = decision.category;

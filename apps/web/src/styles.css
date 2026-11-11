@@ -281,3 +281,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1
 .design-live { border-left: 3px solid var(--signal); padding: 6px 10px; background: var(--bg); }
 .design-logo { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
 .logo-preview { max-height: 48px; max-width: 240px; object-fit: contain; display: block; margin-bottom: 8px; }
+/* Subject-pattern rule editor inside the "Keine Kundenanfrage" bar. */
+.info-bar.wide { flex-basis: 100%; width: 100%; }
+.subject-rule { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.subject-rule input { width: 100%; font-family: var(--mono); font-size: 13px; }
+.subject-rule ul { margin: 4px 0 0; padding-left: 18px; }
+.subject-rule p { margin: 0; }

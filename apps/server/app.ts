@@ -11,7 +11,7 @@ import { DEFAULT_THEME, parseTheme, publicTheme, themeCss, type Theme } from "..
 import { actorFor, changePassword, login, logout, userForSession, workspacesFor } from "../../packages/services/auth.ts";
 import { deleteSnippet, listSnippets, saveSnippet } from "../../packages/services/snippets.ts";
 import { setAutomation, setCaseTopic } from "../../packages/services/automation.ts";
-import { addNote, assign, caseCounts, checkWorkspaceAiKey, deleteCategoryRule, exportCasesCsv, getCase, getSettings, leavePresence, listCases, setCaseCategory, touchPresence, setOutcome, setStatus, setSetupConfirmation, setWorkspaceAiKey, updateWorkspaceSettings, type CaseFilter } from "../../packages/services/cases.ts";
+import { addNote, assign, caseCounts, checkWorkspaceAiKey, deleteCategoryRule, exportCasesCsv, getCase, getSettings, leavePresence, listCases, setCaseCategory, previewSubjectPattern, touchPresence, setOutcome, setStatus, setSetupConfirmation, setWorkspaceAiKey, updateWorkspaceSettings, type CaseFilter } from "../../packages/services/cases.ts";
 import {
   addRoutingRule,
   checkChannel,
@@ -180,9 +180,13 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     return { cases: await listCases(ctx, a, filter, q, topic), counts: await caseCounts(ctx, a) };
   });
   app.post("/api/w/:ws/cases/:id/category", async (req) => {
-    const body = parse(z.object({ category: z.enum(["support", "info"]), remember: z.enum(["none", "address", "domain"]).optional() }), req.body);
-    await setCaseCategory(ctx, await actor(req), (req.params as { id: string }).id, body);
-    return { ok: true };
+    const body = parse(z.object({ category: z.enum(["support", "info"]), remember: z.enum(["none", "address", "domain", "subject"]).optional(), pattern: z.string().max(300).optional() }), req.body);
+    const { moved } = await setCaseCategory(ctx, await actor(req), (req.params as { id: string }).id, body);
+    return { ok: true, moved };
+  });
+  app.post("/api/w/:ws/category-rules/preview", async (req) => {
+    const body = parse(z.object({ category: z.enum(["support", "info"]), pattern: z.string().max(300) }), req.body);
+    return previewSubjectPattern(ctx, await actor(req), body);
   });
   app.delete("/api/w/:ws/category-rules/:id", async (req) => {
     await deleteCategoryRule(ctx, await actor(req), (req.params as { id: string }).id);
