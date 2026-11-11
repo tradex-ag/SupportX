@@ -1,4 +1,5 @@
 import type { MessageAddress } from "./contracts.ts";
+import { matchesSubjectPattern } from "./subject-pattern.ts";
 
 /**
  * Is a new mail a customer request, or information/advertising (newsletters,
@@ -9,7 +10,9 @@ import type { MessageAddress } from "./contracts.ts";
 export type MailCategory = "support" | "info";
 
 export interface CategoryRule {
-  matchType: "from_domain" | "from_address";
+  id?: string;
+  /** from_address before subject_pattern before from_domain: the more specific rule wins. */
+  matchType: "from_domain" | "from_address" | "subject_pattern";
   pattern: string;
   category: MailCategory;
 }
@@ -18,6 +21,8 @@ export interface CategoryDecision {
   category: MailCategory;
   source: "auto" | "rule";
   reason: string;
+  /** The operator rule that decided, for its hit counter. */
+  ruleId?: string;
 }
 
 interface CategoryInput {
@@ -38,7 +43,8 @@ function domainOf(address: string): string {
   return at >= 0 ? address.slice(at + 1).toLowerCase() : "";
 }
 
-function ruleHit(rule: CategoryRule, from: string): boolean {
+function ruleHit(rule: CategoryRule, from: string, subject: string): boolean {
+  if (rule.matchType === "subject_pattern") return matchesSubjectPattern(rule.pattern, subject);
   const pattern = rule.pattern.trim().toLowerCase().replace(/^@/, "");
   if (!pattern) return false;
   if (rule.matchType === "from_address") return from === pattern;
@@ -84,11 +90,17 @@ export function systemNoticeOf(input: { from: MessageAddress; subject: string })
   return sender.platform;
 }
 
+const RULE_ORDER: Record<CategoryRule["matchType"], number> = { from_address: 0, subject_pattern: 1, from_domain: 2 };
+
+export function ruleReason(rule: Pick<CategoryRule, "matchType" | "pattern">): string {
+  return rule.matchType === "subject_pattern" ? `Betreff-Muster „${rule.pattern}“` : `Regel für ${rule.pattern}`;
+}
+
 export function categorizeMail(input: CategoryInput, rules: ReadonlyArray<CategoryRule> = []): CategoryDecision {
   const from = input.from.address.toLowerCase();
-  // The operator's own sender rules always win; address rules before domain rules.
-  const rule = [...rules].sort((a, b) => (a.matchType === b.matchType ? 0 : a.matchType === "from_address" ? -1 : 1)).find((r) => ruleHit(r, from));
-  if (rule) return { category: rule.category, source: "rule", reason: `Regel für ${rule.pattern}` };
+  // The operator's own rules always win; the more specific rule first.
+  const rule = [...rules].sort((a, b) => RULE_ORDER[a.matchType] - RULE_ORDER[b.matchType]).find((r) => ruleHit(r, from, input.subject));
+  if (rule) return { category: rule.category, source: "rule", reason: ruleReason(rule), ...(rule.id ? { ruleId: rule.id } : {}) };
 
   // Amazon mails us a copy of every message we send to a buyer: our own words, not a request.
   if (OWN_COPY.test(`${input.subject}\n${input.bodyText.slice(0, 2000)}`)) return { category: "info", source: "auto", reason: OWN_COPY_REASON };

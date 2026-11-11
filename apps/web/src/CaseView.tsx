@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { orderLinks, type OrderLink } from "./order-links.ts";
+import { checkSubjectPattern, subjectPattern } from "../../../packages/core/subject-pattern.ts";
 import { api, fmtDate, MATCH_LABEL, OUTBOX_LABEL, PLATFORM_LABEL } from "./api.ts";
 import { INTENT_LABEL } from "./Inbox.tsx";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
@@ -131,8 +132,13 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
 
   const due = deadlineState(c.waiting_since, c.reply_hours);
   const sender = data.messages.find((m) => m.direction === "inbound")?.from_address ?? c.customer_address ?? "";
-  const setCategory = (category: "support" | "info", remember: "none" | "address" | "domain") =>
-    act(() => api("POST", `${base}/cases/${caseId}/category`, { category, remember }), category === "info" ? "Als Werbung/Info eingeordnet." : "Als Kundenanfrage eingeordnet. Die Bestellung wird gesucht.");
+  const setCategory = (category: "support" | "info", remember: Remember, pattern?: string) =>
+    act(() => api("POST", `${base}/cases/${caseId}/category`, { category, remember, pattern }), (result) => {
+      const moved = (result as { moved?: number }).moved ?? 0;
+      const done = category === "info" ? "Als Werbung/Info eingeordnet." : "Als Kundenanfrage eingeordnet. Die Bestellung wird gesucht.";
+      if (remember !== "subject") return done;
+      return `${done} Regel gespeichert, gilt auch für neue Mails${moved ? `; ${moved} weitere ${moved === 1 ? "Fall" : "Fälle"} umsortiert` : ""}.`;
+    });
 
   const timeline = [
     ...data.messages.map((m) => ({ ...m, from_case: null as string | null })),
@@ -197,7 +203,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 {data.members.map((m) => <option key={m.id} value={m.id}>{m.display_name}</option>)}
               </select>
             </label>
-            {c.category === "support" && <CategoryBar category={c.category} reason={c.category_reason} sender={sender} canEdit={canEdit} onSet={setCategory} />}
+            {c.category === "support" && <CategoryBar category={c.category} reason={c.category_reason} sender={sender} subject={c.subject} base={base} canEdit={canEdit} onSet={setCategory} />}
           </div>
         )}
       </div>
@@ -211,7 +217,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
       {error && <p className="notice bad">{error}</p>}
       {notice && <p className="notice ok">{notice}</p>}
       {c.last_error && <p className="notice bad">Letzter Fehler: {c.last_error}</p>}
-      {c.category === "info" && <CategoryBar category={c.category} reason={c.category_reason} sender={sender} canEdit={canEdit} onSet={setCategory} />}
+      {c.category === "info" && <CategoryBar category={c.category} reason={c.category_reason} sender={sender} subject={c.subject} base={base} canEdit={canEdit} onSet={setCategory} />}
 
       {c.category !== "support" ? messages : (
       <div className="case-layout">
@@ -919,33 +925,88 @@ function NoteForm({ onSubmit }: { onSubmit: (body: string) => void }) {
   );
 }
 
-function CategoryBar({ category, reason, sender, canEdit, onSet }: {
-  category: "support" | "info"; reason: string | null; sender: string; canEdit: boolean;
-  onSet: (category: "support" | "info", remember: "none" | "address" | "domain") => void;
+type Remember = "none" | "address" | "domain" | "subject";
+
+function CategoryBar({ category, reason, sender, subject, base, canEdit, onSet }: {
+  category: "support" | "info"; reason: string | null; sender: string; subject: string; base: string; canEdit: boolean;
+  onSet: (category: "support" | "info", remember: Remember, pattern?: string) => void;
 }) {
-  const [asking, setAsking] = useState(false);
+  const [asking, setAsking] = useState<false | "choose" | "subject">(false);
   const domain = sender.includes("@") ? sender.slice(sender.lastIndexOf("@") + 1) : "";
   const target = category === "info" ? "support" : "info";
-  const choices = (
+  const close = () => setAsking(false);
+  const choices = asking === "subject" ? (
+    <SubjectRuleEditor subject={subject} target={target} base={base} onCancel={close} onSave={(pattern) => { close(); onSet(target, "subject", pattern); }} />
+  ) : (
     <div className="row wrap">
-      <button onClick={() => { setAsking(false); onSet(target, "none"); }}>Nur diese Mail</button>
-      {sender && <button onClick={() => { setAsking(false); onSet(target, "address"); }}>Alle von {sender}</button>}
-      {domain && <button onClick={() => { setAsking(false); onSet(target, "domain"); }}>Alle von @{domain}</button>}
-      <button className="link" onClick={() => setAsking(false)}>Abbrechen</button>
+      <button onClick={() => { close(); onSet(target, "none"); }}>Nur diese Mail</button>
+      {subject.trim() && <button onClick={() => setAsking("subject")} title="Alle Mails, deren Betreff bis auf Beträge und Nummern gleich ist">Alle mit diesem Betreff-Muster …</button>}
+      {sender && <button onClick={() => { close(); onSet(target, "address"); }}>Alle von {sender}</button>}
+      {domain && <button onClick={() => { close(); onSet(target, "domain"); }}>Alle von @{domain}</button>}
+      <button className="link" onClick={close}>Abbrechen</button>
     </div>
   );
   if (category === "info") {
     return (
       <div className="notice info-bar">
         <div><strong>Werbung oder Info</strong>, kein Antwortentwurf.{reason ? <span className="muted"> Erkannt an: {reason}.</span> : null}</div>
-        {canEdit && (asking ? <><div className="small">Als Kundenanfrage behandeln:</div>{choices}</> : <button onClick={() => setAsking(true)}>Ist eine Kundenanfrage</button>)}
+        {canEdit && (asking ? <><div className="small">Als Kundenanfrage behandeln:</div>{choices}</> : <button onClick={() => setAsking("choose")}>Ist eine Kundenanfrage</button>)}
       </div>
     );
   }
   if (!canEdit) return null;
   return asking ? (
-    <div className="notice info-bar"><div className="small">Als Werbung/Info einordnen, ohne Antwort:</div>{choices}</div>
+    <div className={`notice info-bar${asking === "subject" ? " wide" : ""}`}><div className="small">Als Werbung/Info einordnen, ohne Antwort:</div>{choices}</div>
   ) : (
-    <button className="ghost" onClick={() => setAsking(true)} title="Als Werbung oder Info einordnen, ohne Antwort">Keine Kundenanfrage</button>
+    <button className="ghost" onClick={() => setAsking("choose")} title="Als Werbung oder Info einordnen, ohne Antwort">Keine Kundenanfrage</button>
+  );
+}
+
+const checkPatternText = (raw: string): string => { const c = checkSubjectPattern(raw); return c.ok ? c.pattern : raw; };
+
+interface PatternPreview { pattern: string; valid: boolean; error?: string; matching: number; moving: number; examples: Array<{ id: string; subject: string; category: "support" | "info" }> }
+
+/** Proposes the subject with amounts and numbers as "*", lets the person edit it and shows what it would catch. */
+function SubjectRuleEditor({ subject, target, base, onSave, onCancel }: {
+  subject: string; target: "support" | "info"; base: string; onSave: (pattern: string) => void; onCancel: () => void;
+}) {
+  const [pattern, setPattern] = useState(() => subjectPattern(subject));
+  const [preview, setPreview] = useState<PatternPreview | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    let stale = false;
+    const timer = setTimeout(() => {
+      api<PatternPreview>("POST", `${base}/category-rules/preview`, { pattern, category: target })
+        .then((p) => { if (!stale) { setPreview(p); setFailed(null); } })
+        .catch((err: Error) => { if (!stale) setFailed(err.message); });
+    }, 300);
+    return () => { stale = true; clearTimeout(timer); };
+  }, [base, pattern, target]);
+  const current = preview && preview.pattern === checkPatternText(pattern) ? preview : null;
+  const label = target === "info" ? "Werbung/Info" : "Kundenanfrage";
+  return (
+    <div className="subject-rule">
+      <label className="field"><span>Betreff-Muster (* steht für Beträge, Nummern und andere wechselnde Teile)</span>
+        <input value={pattern} onChange={(e) => setPattern(e.target.value)} maxLength={300} spellCheck={false} />
+      </label>
+      {failed && <p className="error small">{failed}</p>}
+      {current && !current.valid && <p className="error small">{current.error}</p>}
+      {current?.valid && (
+        <div className="small">
+          <p>
+            Passt auf <strong>{current.matching}</strong> bestehende {current.matching === 1 ? "Fall" : "Fälle"}
+            {current.moving > 0 ? <>, davon werden <strong>{current.moving}</strong> als {label} umsortiert</> : null}.
+            {" "}Gilt danach für jede neue Mail mit diesem Betreff. Fälle, die schon beantwortet oder von Hand eingeordnet sind, bleiben, wie sie sind.
+          </p>
+          {current.examples.length > 0 && (
+            <ul className="muted">{current.examples.map((e) => <li key={e.id}>{e.subject}{e.category === target ? " (schon so eingeordnet)" : ""}</li>)}</ul>
+          )}
+        </div>
+      )}
+      <div className="row wrap">
+        <button className="primary" disabled={!current?.valid} onClick={() => onSave(pattern)}>Regel speichern{current?.valid && current.moving > 0 ? ` und ${current.moving} umsortieren` : ""}</button>
+        <button className="link" onClick={onCancel}>Abbrechen</button>
+      </div>
+    </div>
   );
 }

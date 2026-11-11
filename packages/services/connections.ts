@@ -222,9 +222,9 @@ export async function loadRoutingRules(q: Queryable, workspaceId: string, connec
 }
 
 export async function loadCategoryRules(q: Queryable, workspaceId: string): Promise<CategoryRule[]> {
-  const rows = await many<{ match_type: CategoryRule["matchType"]; pattern: string; category: CategoryRule["category"] }>(
-    q, "SELECT match_type, pattern, category FROM category_rules WHERE workspace_id = $1", [workspaceId]);
-  return rows.map((r) => ({ matchType: r.match_type, pattern: r.pattern, category: r.category }));
+  const rows = await many<{ id: string; match_type: CategoryRule["matchType"]; pattern: string; category: CategoryRule["category"] }>(
+    q, "SELECT id, match_type, pattern, category FROM category_rules WHERE workspace_id = $1", [workspaceId]);
+  return rows.map((r) => ({ id: r.id, matchType: r.match_type, pattern: r.pattern, category: r.category }));
 }
 
 // ---------------------------------------------------------------------------
