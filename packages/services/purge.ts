@@ -7,6 +7,7 @@ import type { Tx } from "../storage/db.ts";
 export async function purgeWorkspace(tx: Tx, workspaceId: string): Promise<void> {
   const steps = [
     "UPDATE conversations SET latest_inbound_message_id = NULL WHERE workspace_id = $1",
+    "DELETE FROM message_forwards WHERE workspace_id = $1",
     "DELETE FROM outbox WHERE workspace_id = $1",
     "DELETE FROM approvals WHERE workspace_id = $1",
     "DELETE FROM drafts WHERE workspace_id = $1",

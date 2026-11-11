@@ -39,6 +39,8 @@ interface CaseData {
   linkTargets?: { erp_base_url: string | null; mirakl_base_url: string | null } | null;
   conversation: Rec & { topic: string | null; topic_source: string | null; waiting_since: string | null; reply_hours: number | null; snooze_until: string | null; outcome: string | null; outcome_note: string | null; outcome_at: string | null; id: string; subject: string; status: string; category: "support" | "info"; category_reason: string | null; customer_address: string | null; source_platform: string; order_match_status: string; merchant_account_id: string | null; merchant_account_name: string | null; connection_name: string; assignee_user_id: string | null; last_error: string | null; order_references: string[] };
   messages: Array<{ id: string; direction: string; kind: string; outbox_id?: string | null; from_address: string; from_name: string | null; reply_to: Array<{ address: string; name?: string }> | null; subject: string; body_text: string; received_at: string; has_attachments: boolean; removed_remotely_at: string | null }>;
+  /** Forwards of mails of this case, sent by a person. */
+  forwards?: ForwardRow[];
   /** Messages of other cases of the same customer or order, for context. */
   customerHistory?: { cases: HistoryCase[]; counts: { cases: number; refunds: number; replacements: number; returns: number } };
   relatedMessages?: Array<CaseData["messages"][number] & { conversation_id: string; conversation_subject: string }>;
@@ -140,6 +142,8 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
     ...(data.relatedMessages ?? []).map((m) => ({ ...m, outbox_id: null, from_case: m.conversation_subject || "(ohne Betreff)" })),
   ], data.outbox);
   const resolveOutbox = (id: string, resolution: "was_sent" | "was_not_sent") => act(() => api("POST", `${base}/outbox/${id}/resolve`, { resolution }));
+  const resolveForward = (id: string, action: "check" | "was_sent" | "was_not_sent") =>
+    act(() => api<{ state: string }>("POST", `${base}/forwards/${id}/resolve`, { action }), (r) => (r as { state: string }).state === "confirmed" ? "Weiterleitung in „Gesendete Elemente“ gefunden." : action === "check" ? "Noch nicht in „Gesendete Elemente“ gefunden." : "Geklärt.");
   const messages = (
     <section className="card">
       <h3>Verlauf ({timeline.length})</h3>
@@ -163,6 +167,8 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
                 </div>
                 <MessageBody text={m.body_text} />
                 {m.has_attachments && <Attachments base={base} messageId={m.id} />}
+                {(data.forwards ?? []).filter((f) => f.message_id === m.id).map((f) => <ForwardLog key={f.id} forward={f} canEdit={canEdit} onResolve={resolveForward} />)}
+                {canEdit && !m.from_case && c.connection_kind === "microsoft_graph" && m.kind !== "own_copy" && <ForwardBox base={base} messageId={m.id} onDone={(note) => { setNotice(note); void load(); }} />}
               </article>
             );
           })())}
@@ -398,6 +404,142 @@ function Attachments({ base, messageId }: { base: string; messageId: string }) {
       ) : (
         <a key={a.id} href={url(a)} download={a.name} className="button file">{a.name} ({Math.max(1, Math.round(a.size / 1024))} KB) herunterladen</a>
       ))}
+    </div>
+  );
+}
+
+type ForwardRow = { id: string; message_id: string; recipients: string[]; comment: string; mode: "original" | "text"; state: string; attachments_included: number | null; attachments_left_out: string[]; last_error: string | null; created_at: string; created_by_name: string | null };
+type ForwardInfo = { mode: "original" | "text"; subject: string; notice: string; suggestions: string[]; blockers: string[] };
+const FORWARD_STATE: Record<string, { label: string; tone: string }> = {
+  sending: { label: "wird gesendet", tone: "muted" }, sent: { label: "vom Postfach angenommen", tone: "ok" }, confirmed: { label: "in Gesendete Elemente", tone: "ok" },
+  uncertain: { label: "ungeklärt", tone: "bad" }, failed: { label: "nicht gesendet", tone: "bad" },
+};
+
+/** "Weitergeleitet an … am …" under the forwarded mail. */
+function ForwardLog({ forward: f, canEdit, onResolve }: { forward: ForwardRow; canEdit: boolean; onResolve: (id: string, action: "check" | "was_sent" | "was_not_sent") => void }) {
+  const st = FORWARD_STATE[f.state] ?? { label: f.state, tone: "muted" };
+  return (
+    <div className="forward-log small">
+      <div className="row wrap">
+        <span>Weitergeleitet an {f.recipients.join(", ")} am {fmtDate(f.created_at)}{f.created_by_name ? ` von ${f.created_by_name}` : ""}</span>
+        <span className={`pill ${st.tone}`}>{st.label}</span>
+        {f.mode === "text" && <span className="muted">nur Text, ohne Adressen{f.attachments_included ? `, ${f.attachments_included} Anhang/Anhänge` : ""}</span>}
+      </div>
+      {f.comment && <p className="muted">Begleittext: {f.comment}</p>}
+      {f.attachments_left_out.length > 0 && <p className="warn-text">Nicht mitgesendet (zu groß): {f.attachments_left_out.join(", ")}</p>}
+      {f.last_error && <p className="error">{f.last_error}</p>}
+      {canEdit && (f.state === "uncertain" || f.state === "sending") && (
+        <div className="row wrap">
+          <span>Bitte in „Gesendete Elemente“ prüfen:</span>
+          <button onClick={() => onResolve(f.id, "check")}>Automatisch prüfen</button>
+          <button onClick={() => onResolve(f.id, "was_sent")}>Wurde gesendet</button>
+          <button onClick={() => onResolve(f.id, "was_not_sent")}>Wurde nicht gesendet</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const EMAIL_RE = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
+
+/** Forward one mail: recipients, optional own text, confirm, send through the mailbox. */
+function ForwardBox({ base, messageId, onDone }: { base: string; messageId: string; onDone: (notice: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [info, setInfo] = useState<ForwardInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [to, setTo] = useState<string[]>([]);
+  const [typed, setTyped] = useState("");
+  const [comment, setComment] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const forwardId = useRef<string>("");
+
+  const start = async () => {
+    setOpen(true);
+    setError(null);
+    setConfirming(false);
+    forwardId.current = crypto.randomUUID();
+    try {
+      setInfo(await api<ForwardInfo>("GET", `${base}/messages/${messageId}/forward`));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const close = () => {
+    setOpen(false);
+    setTo([]);
+    setTyped("");
+    setComment("");
+    setConfirming(false);
+  };
+  const add = (raw: string) => {
+    const parts = raw.split(/[\s,;]+/).map((p) => p.trim().toLowerCase()).filter(Boolean);
+    const bad = parts.filter((p) => !EMAIL_RE.test(p));
+    setTo((cur) => [...cur, ...parts.filter((p) => EMAIL_RE.test(p) && !cur.includes(p))]);
+    setTyped(bad.join(", "));
+    setError(bad.length ? `Keine gültige E-Mail-Adresse: ${bad.join(", ")}` : null);
+  };
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ state: string; error?: string }>("POST", `${base}/messages/${messageId}/forward`, { forwardId: forwardId.current, to, comment });
+      if (r.state === "failed") {
+        setError(r.error ?? "Weiterleitung fehlgeschlagen. Es wurde nichts gesendet.");
+        forwardId.current = crypto.randomUUID();
+        setConfirming(false);
+        onDone("");
+        return;
+      }
+      onDone(r.state === "uncertain" ? "Weiterleitung ungeklärt: bitte in „Gesendete Elemente“ prüfen." : `Weitergeleitet an ${to.join(", ")}.`);
+      close();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) return <div className="row"><button className="link small" onClick={() => void start()}>Weiterleiten</button></div>;
+  const pending = typed.trim() !== "";
+  const blocked = (info?.blockers.length ?? 0) > 0;
+  return (
+    <div className="forward-box">
+      <div className="row"><strong className="small">Weiterleiten</strong><button className="link small" onClick={close}>Abbrechen</button></div>
+      {!info && !error && <p className="small muted">Lädt …</p>}
+      {info && !confirming && (
+        <>
+          <label className="field"><span>An</span>
+            <div className="recipients">
+              {to.map((a) => <span key={a} className="pill">{a} <button className="link" aria-label={`${a} entfernen`} onClick={() => setTo(to.filter((x) => x !== a))}>×</button></span>)}
+              <input type="email" value={typed} placeholder={to.length ? "weitere Adresse" : "name@firma.de"} onChange={(e) => setTyped(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === "," || e.key === ";") { e.preventDefault(); add(typed); } }} onBlur={() => typed.trim() && add(typed)} />
+            </div>
+          </label>
+          {info.suggestions.filter((sug) => !to.includes(sug)).length > 0 && (
+            <div className="row wrap small"><span className="muted">Zuletzt verwendet:</span>
+              {info.suggestions.filter((sug) => !to.includes(sug)).slice(0, 8).map((sug) => <button key={sug} className="chip" onClick={() => setTo([...to, sug])}>{sug}</button>)}
+            </div>
+          )}
+          <label className="field"><span>Eigener Text (optional)</span>
+            <textarea rows={3} value={comment} maxLength={5000} onChange={(e) => setComment(e.target.value)} placeholder="z. B. Bitte prüfen, ob die Ware so ausgeliefert wurde." />
+          </label>
+          <p className={`small ${info.mode === "text" ? "warn-text" : "muted"}`}>{info.notice}</p>
+          {blocked && <p className="small error">{info.blockers.join(" ")}</p>}
+          <div className="row"><button className="primary" disabled={to.length === 0 || pending || blocked} onClick={() => setConfirming(true)}>Weiter</button></div>
+        </>
+      )}
+      {info && confirming && (
+        <div className="confirm small">
+          <p><strong>Wirklich weiterleiten?</strong></p>
+          <p>An: {to.join(", ")}</p>
+          <p>Betreff: {info.subject}</p>
+          {comment.trim() && <p>Eigener Text: {comment.trim()}</p>}
+          <p className={info.mode === "text" ? "warn-text" : "muted"}>{info.mode === "text" ? "Nur der Text ohne E-Mail-Adressen, Anhänge bis 3 MB." : "Die Original-Mail mit Absender und Anhängen."}</p>
+          <div className="row"><button onClick={() => setConfirming(false)} disabled={busy}>Zurück</button><button className="primary" onClick={() => void send()} disabled={busy}>{busy ? "Wird gesendet …" : "Jetzt weiterleiten"}</button></div>
+        </div>
+      )}
+      {error && <p className="small error">{error}</p>}
     </div>
   );
 }

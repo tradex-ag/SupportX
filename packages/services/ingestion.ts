@@ -10,7 +10,7 @@ import { channelFor, loadCategoryRules, loadChannelConnection, loadRoutingRules,
 import type { AppContext } from "./context.ts";
 import { enqueue } from "./jobs.ts";
 
-export type IngestOutcome = "stored" | "duplicate" | "echo" | "manual_external" | "ignored_unrelated_outbound";
+export type IngestOutcome = "stored" | "duplicate" | "echo" | "forward_echo" | "manual_external" | "ignored_unrelated_outbound";
 
 interface ConversationRow {
   id: string;
@@ -87,6 +87,15 @@ export async function ingestMessage(tx: Tx, connection: ChannelConnectionRow, ru
   let outboxId: string | null = null;
   if (message.direction === "outbound") {
     const marker = message.headers[OUTBOX_HEADER];
+    // A forward a person sent from a case: logged in message_forwards, not a reply to the customer.
+    // Never treated as a manual reply (that would withdraw approvals and drafts of the case).
+    const forward = marker && /^[0-9a-f-]{36}$/i.test(marker)
+      ? await one<{ id: string }>(tx, "SELECT id FROM message_forwards WHERE workspace_id = $1 AND id = $2 AND connection_id = $3", [ws, marker, connection.id])
+      : null;
+    if (forward) {
+      await tx.query("UPDATE message_forwards SET state = 'confirmed', external_message_id = $3, last_error = NULL, updated_at = now() WHERE workspace_id = $1 AND id = $2 AND state IN ('sending','sent','uncertain')", [ws, forward.id, message.externalMessageId]);
+      return "forward_echo";
+    }
     let outbox = marker && /^[0-9a-f-]{36}$/i.test(marker)
       ? await one<{ id: string }>(tx, "SELECT id FROM outbox WHERE workspace_id = $1 AND id = $2 AND connection_id = $3", [ws, marker, connection.id])
       : null;
@@ -223,7 +232,7 @@ export async function ingestMessage(tx: Tx, connection: ChannelConnectionRow, ru
 
 /** Persist a sync batch, then the cursors. A crash in between only causes a harmless replay. */
 export async function applySyncResult(ctx: AppContext, connection: ChannelConnectionRow, result: SyncResult): Promise<Record<IngestOutcome, number>> {
-  const counts: Record<IngestOutcome, number> = { stored: 0, duplicate: 0, echo: 0, manual_external: 0, ignored_unrelated_outbound: 0 };
+  const counts: Record<IngestOutcome, number> = { stored: 0, duplicate: 0, echo: 0, forward_echo: 0, manual_external: 0, ignored_unrelated_outbound: 0 };
   const rules = await loadRoutingRules(ctx.db, connection.workspace_id, connection.id);
   const categoryRules = await loadCategoryRules(ctx.db, connection.workspace_id);
   // Oldest first, so the latest inbound message ends up as latest_inbound.
@@ -333,6 +342,7 @@ export async function mergeSplitFollowUps(db: Db): Promise<number> {
       const ws = p.workspace_id;
       await tx.query("UPDATE messages SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
       await tx.query("UPDATE internal_notes SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
+      await tx.query("UPDATE message_forwards SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
       await tx.query("UPDATE conversation_threads SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
       const conn = (await one<{ connection_id: string }>(tx, "SELECT connection_id FROM conversations WHERE workspace_id = $1 AND id = $2", [ws, p.source]))!;
       await tx.query("DELETE FROM conversations WHERE workspace_id = $1 AND id = $2", [ws, p.source]);

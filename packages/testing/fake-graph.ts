@@ -34,6 +34,8 @@ export interface FakeGraph {
   mailbox: string;
   messages: FakeMail[];
   replies: Array<{ inReplyTo: string; comment: string; headers: Array<{ name: string; value: string }>; attachments: Array<{ name: string; contentType: string; contentBytes: string }> }>;
+  /** Forwards (POST /messages/{id}/forward) and new mails (POST /sendMail). */
+  forwards: Array<{ kind: "forward" | "sendMail"; original?: string; to: string[]; subject: string; body: string; headers: Array<{ name: string; value: string }>; attachments: Array<{ name: string; contentType: string; contentBytes: string }> }>;
   addInbound(input: { from: string; fromName?: string; subject: string; body: string; conversationId?: string; replyTo?: string; receivedAt?: Date; internetMessageId?: string; id?: string; attachments?: FakeMail["attachments"] }): FakeMail;
   addSent(input: { to: string; subject: string; body: string; conversationId: string; headers?: Array<{ name: string; value: string }> }): FakeMail;
   setReplyFault(fault: ReplyFault): void;
@@ -53,6 +55,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 export async function startFakeGraph(opts: { mailbox: string; clientSecret: string; pageSize?: number; port?: number; hangMs?: number }): Promise<FakeGraph> {
   const messages: FakeMail[] = [];
   const replies: FakeGraph["replies"] = [];
+  const forwards: FakeGraph["forwards"] = [];
   const requests: string[] = [];
   let seq = 0;
   let epoch = 1;
@@ -197,6 +200,33 @@ export async function startFakeGraph(opts: { mailbox: string; clientSecret: stri
       return send(202);
     }
 
+    const forward = /^\/messages\/([^/]+)\/forward$/.exec(rest);
+    if (req.method === "POST" && (forward || rest === "/sendMail")) {
+      type Rcpt = Array<{ emailAddress?: { address?: string } }>;
+      const payload = JSON.parse(raw || "{}") as { comment?: string; toRecipients?: Rcpt; message?: { subject?: string; body?: { content?: string }; toRecipients?: Rcpt; internetMessageHeaders?: Array<{ name: string; value: string }>; attachments?: Array<{ name: string; contentType: string; contentBytes: string }> } };
+      const original = forward ? messages.find((m) => m.id === decodeURIComponent(forward[1]!)) : undefined;
+      if (forward && !original) return send(404, { error: { code: "ErrorItemNotFound", message: "Not found" } });
+      // Documented constraints (MS-8): toRecipients either top level or in message, comment or message.body.
+      if (forward && (!!payload.toRecipients === !!payload.message?.toRecipients)) return send(400, { error: { code: "ErrorInvalidRequest", message: "Specify toRecipients either top level or in message." } });
+      if (forward && payload.comment !== undefined && payload.message?.body) return send(400, { error: { code: "ErrorInvalidRequest", message: "comment and message.body." } });
+      const to = (payload.toRecipients ?? payload.message?.toRecipients ?? []).map((r) => r.emailAddress?.address ?? "").filter(Boolean);
+      if (to.length === 0) return send(400, { error: { code: "ErrorInvalidRecipients", message: "At least one recipient is required." } });
+      const current = fault;
+      fault = "none";
+      if (current === "reject_400") return send(400, { error: { code: "ErrorInvalidRecipients", message: "Simulated rejection." } });
+      if (current === "reject_403") return send(403, { error: { code: "ErrorAccessDenied", message: "Access is denied. Check credentials and try again." } });
+      if (current === "throttle_429") return send(429, { error: { code: "ApplicationThrottled", message: "Simulated throttling." } });
+      if (current === "timeout_before_send") return void setTimeout(() => send(504), opts.hangMs ?? 3000);
+      const subject = original ? `WG: ${original.subject}` : payload.message?.subject ?? "";
+      const body = original ? `${payload.comment ?? ""}\n\n${original.body}` : payload.message?.body?.content ?? "";
+      const headers = payload.message?.internetMessageHeaders ?? [];
+      forwards.push({ kind: original ? "forward" : "sendMail", original: original?.id, to, subject, body, headers, attachments: original ? (original.attachments ?? []).filter((a) => !a.isInline) : payload.message?.attachments ?? [] });
+      addSent({ to: to[0]!, subject, body, conversationId: original?.conversationId ?? `conv-${randomUUID()}`, headers });
+      if (current === "timeout_after_send") return void setTimeout(() => send(202), opts.hangMs ?? 3000);
+      if (current === "server_error_after_send") return send(503, { error: { code: "ServiceUnavailable", message: "Simulated." } });
+      return send(202);
+    }
+
     if (req.method === "GET" && rest === "/mailFolders/sentitems/messages") {
       return send(200, { value: messages.filter((m) => m.folder === "sentitems").map(toGraph) });
     }
@@ -218,6 +248,7 @@ export async function startFakeGraph(opts: { mailbox: string; clientSecret: stri
     mailbox: opts.mailbox,
     messages,
     replies,
+    forwards,
     requests,
     addInbound,
     addSent,
