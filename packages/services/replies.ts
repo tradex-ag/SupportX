@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AiProvider, AllowedFact, CaseRisk, OrderRecord, Proposal, ProposalInput, ReplyAttachment, ReplyDecision, ReplyOutcome, SourcePlatform } from "../core/contracts.ts";
 import { checkTitles } from "../core/title-check.ts";
+import { weightHints } from "../core/weight-check.ts";
 import { customerText } from "../core/customer-text.ts";
 import { detectRisks, newestEmailText } from "../core/classify.ts";
 import { checkDraft, hasBlockingIssue, type DraftIssue } from "../core/draft-check.ts";
@@ -82,7 +83,7 @@ export const DECISIONS: ReadonlyArray<ReplyDecision> = ["customer_right", "custo
 /** Plausibility hints for the latest customer message against the linked order. */
 export function titleHintsFor(order: OrderRecord | null, latestCustomerText: string): string[] {
   if (!order) return [];
-  return checkTitles(customerText(latestCustomerText), order.lines.map((l) => ({ position: l.position, title: l.title, articleName: l.articleName }))).map((h) => h.text);
+  return checkTitles(customerText(latestCustomerText), order.lines.map((l) => ({ position: l.position, title: l.title, articleName: l.articleName, quantity: l.quantity }))).map((h) => h.text);
 }
 
 export async function generateDraft(ctx: AppContext, workspaceId: string, conversationId: string, decision?: ReplyDecision, opts: { rulesOnly?: boolean } = {}): Promise<string | null> {
@@ -106,7 +107,7 @@ export async function generateDraft(ctx: AppContext, workspaceId: string, conver
     tone: ws.reply_tone,
     signature: ws.reply_signature,
     decision,
-    hints: titleHintsFor(order, [...history].find((m) => m.direction === "inbound")?.body_text ?? ""),
+    hints: [...titleHintsFor(order, [...history].find((m) => m.direction === "inbound")?.body_text ?? ""), ...(order ? weightHints(order) : [])],
   };
 
   // The workspace's own Claude key wins over the installation's provider.

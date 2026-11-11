@@ -67,7 +67,9 @@ export function demoWeclappData(): FakeWeclappData {
     ],
     // Linked ERP articles. Position soi-6 carries a marketplace title that differs from its article (demo of the title check).
     article: [
-      { id: "ART-soi-1", articleNumber: "D-1001", name: "Demo-Teekanne Glas 1,2 l" },
+      // Weights in kg as decimal strings, like weclapp sends them.
+      { id: "ART-soi-1", articleNumber: "D-1001", name: "Demo-Teekanne Glas 1,2 l", articleGrossWeight: "0.9", articleNetWeight: "0.8" },
+      { id: "ART-soi-4", articleNumber: "D-1004", name: "Demo-Kaffeebecher, blau", articleGrossWeight: "0.35" },
       { id: "ART-soi-6", articleNumber: "D-1006", name: "Demo-Kissenbezug 40x40, rot" },
     ],
     shipment: [
@@ -77,8 +79,8 @@ export function demoWeclappData(): FakeWeclappData {
         shipmentItems: [{ salesOrderItemId: "soi-1", title: "Demo-Teekanne Glas 1,2 l", quantity: "1" }],
         // Two parcels in one shipment: both must stay visible.
         parcels: [
-          { id: "pc-1", trackingId: "DEMO00012345", trackingUrl: "https://tracking.demo.invalid/DEMO00012345", shippingCarrierId: "carrier-demo" },
-          { id: "pc-2", trackingId: "DEMO00012346", trackingUrl: "https://tracking.demo.invalid/DEMO00012346", shippingCarrierId: "carrier-demo" },
+          { id: "pc-1", trackingId: "DEMO00012345", trackingUrl: "https://tracking.demo.invalid/DEMO00012345", shippingCarrierId: "carrier-demo", weight: "0.6" },
+          { id: "pc-2", trackingId: "DEMO00012346", trackingUrl: "https://tracking.demo.invalid/DEMO00012346", shippingCarrierId: "carrier-demo", weight: "0.55" },
         ],
       },
       {
@@ -97,6 +99,8 @@ export function demoWeclappData(): FakeWeclappData {
         shippingDate: day("2026-10-16"), statusHistory: [{ status: "SHIPPED", statusDate: day("2026-10-16") }, { status: "DELIVERED", statusDate: day("2026-10-18") }],
         shipmentItems: [{ salesOrderItemId: "soi-4", quantity: "2" }],
         // Deprecated single tracking field only: shown and labelled as legacy.
+        // Two mugs of 0.35 kg ordered, the parcel weighed 0.42 kg: one is probably missing (demo of the weight check).
+        packageWeight: "0.42",
         parcels: [], packageTrackingNumber: "DEMOLEGACY1", packageTrackingUrl: "https://tracking.demo.invalid/DEMOLEGACY1",
       },
       {
