@@ -89,9 +89,19 @@ export async function ingestMessage(tx: Tx, connection: ChannelConnectionRow, ru
     const marker = message.headers[OUTBOX_HEADER];
     // A forward a person sent from a case: logged in message_forwards, not a reply to the customer.
     // Never treated as a manual reply (that would withdraw approvals and drafts of the case).
+    // Without the marker (if Exchange drops it): a forward-style subject sent only to
+    // the addresses of a recent, still unconfirmed forward of this mailbox.
+    const recipients = message.to.map((t) => t.address.toLowerCase());
     const forward = marker && /^[0-9a-f-]{36}$/i.test(marker)
       ? await one<{ id: string }>(tx, "SELECT id FROM message_forwards WHERE workspace_id = $1 AND id = $2 AND connection_id = $3", [ws, marker, connection.id])
-      : null;
+      : recipients.length > 0 && /^\s*(fwd?|wg)\s*:/i.test(message.subject)
+        ? await one<{ id: string }>(
+          tx,
+          `SELECT id FROM message_forwards WHERE workspace_id = $1 AND connection_id = $2 AND state IN ('sending','sent','uncertain')
+             AND created_at > now() - interval '2 days' AND recipients @> $3::text[] ORDER BY created_at DESC LIMIT 1`,
+          [ws, connection.id, recipients],
+        )
+        : null;
     if (forward) {
       await tx.query("UPDATE message_forwards SET state = 'confirmed', external_message_id = $3, last_error = NULL, updated_at = now() WHERE workspace_id = $1 AND id = $2 AND state IN ('sending','sent','uncertain')", [ws, forward.id, message.externalMessageId]);
       return "forward_echo";

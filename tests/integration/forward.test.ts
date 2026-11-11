@@ -125,4 +125,21 @@ describe("forward a mail from a case", () => {
     assert.match(rejected.error ?? "", /Senderecht/);
     assert.equal((await forwardMessage(h.ctx, s.agent, messageId, { forwardId: randomUUID(), to: "buero@firma.example" })).state, "sent");
   });
+
+  it("recognises the sent copy of a forward also when Exchange drops the marker header", async () => {
+    h = await createHarness({ sendMode: "enabled" });
+    const s = await seedWorkspace(h);
+    await setSendEnabled(h.ctx, s.owner, s.connectionId, true);
+    h.graph.addInbound({ from: "kunde@example.invalid", subject: "Defekt", body: "Geht nicht an.", conversationId: "fw-nomarker" });
+    await syncAndDrain(h, s);
+    const conv = await caseByThread(h, s, "fw-nomarker");
+    const draftBefore = await currentDraft(h, s, conv.id);
+    h.graph.setStripCustomHeaders(true);
+    const r = await forwardMessage(h.ctx, s.agent, await firstMessage(conv.id), { forwardId: randomUUID(), to: "technik@hersteller.example" });
+    assert.equal(r.state, "sent");
+    await syncAndDrain(h, s);
+    assert.equal((await caseByThread(h, s, "fw-nomarker")).version, conv.version, "not taken for a reply written in Outlook");
+    assert.equal((await currentDraft(h, s, conv.id))?.id, draftBefore?.id);
+    assert.equal(((await getCase(h.ctx, s.agent, conv.id)).forwards as Array<{ state: string }>)[0]!.state, "confirmed");
+  });
 });
