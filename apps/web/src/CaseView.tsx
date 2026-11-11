@@ -5,6 +5,7 @@ import { INTENT_LABEL } from "./Inbox.tsx";
 import { customerText, shortText } from "../../../packages/core/customer-text.ts";
 import { trackingHref } from "../../../packages/core/tracking.ts";
 import { deadlineState } from "../../../packages/core/deadline.ts";
+import { formatKg, weightChecks, WEIGHT_SOURCE_NOTE } from "../../../packages/core/weight-check.ts";
 import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -17,18 +18,19 @@ interface Draft {
   cited_fact_ids: string[]; facts: Fact[]; missing_information: string[]; suggested_actions: string[]; risks: string[];
   issues: Issue[]; decision: string | null; document_ids?: string[]; generated_by: string; ai_model: string | null; prompt_version: string | null; created_at: string; updated_at: string;
 }
-interface Parcel { id?: string; trackingId?: string; trackingUrl?: string; carrierId?: string; source: string }
+interface Parcel { id?: string; trackingId?: string; trackingUrl?: string; carrierId?: string; source: string; weightKg?: number }
 interface Shipment {
   id: string; shipmentNumber?: string; erpStatus?: string; erpStatusAt?: string; shippingDate?: string; deliveryDate?: string;
-  items: Array<{ title?: string; quantity: number }>; parcels: Parcel[]; returnLabels?: number;
+  items: Array<{ orderLineId?: string; title?: string; quantity: number }>; parcels: Parcel[]; returnLabels?: number; weightKg?: number;
 }
 interface OrderSnapshot {
   id: string; orderNumber?: string; orderNumberAtCustomer?: string; orderDate?: string; status?: string; salesChannel?: string;
-  lines: Array<{ id: string; title: string; quantity: number; shippedQuantity?: number; returnedQuantity?: number }>;
+  lines: Array<{ id: string; title: string; quantity: number; shippedQuantity?: number; returnedQuantity?: number; grossWeightKg?: number; netWeightKg?: number }>;
   shipments: Shipment[];
   invoices: Array<{ id: string; invoiceNumber?: string; invoiceDate?: string; status?: string; paymentStatus?: string; type?: string }>;
   returns?: ReturnFact[];
   returnsError?: string;
+  weightsRead?: boolean;
   retrievedAt: string;
 }
 
@@ -373,9 +375,9 @@ function Concern({ data, draft, canEdit, onTopic }: { data: CaseData; draft: Dra
       {words && <blockquote>{shortText(words, 600)}</blockquote>}
       {(data.titleHints?.length ?? 0) > 0 && (
         <div className="title-hint">
-          <strong>Mögliche Falschlieferung oder falsche Artikelzuordnung</strong>
+          <strong>Abweichung zwischen Kunde, Bestellung und Artikel</strong>
           <ul>{data.titleHints!.map((h) => <li key={h}>{h}</li>)}</ul>
-          <p className="small muted">Bitte den Titel der Bestellung auf dem Marktplatz mit dem Artikel in weclapp vergleichen.</p>
+          <p className="small muted">Bitte den Titel, das Bild und die Menge des Angebots auf dem Marktplatz mit dem Artikel in weclapp vergleichen. Mögliche Ursachen: Falschlieferung, falsche Artikelzuordnung oder ein falsch eingestelltes Angebot.</p>
         </div>
       )}
     </section>
@@ -614,6 +616,32 @@ function ReturnBox({ order, canEdit, onRefresh }: { order: OrderSnapshot; canEdi
   );
 }
 
+/** Ordered weight (article master data) against the booked package weight: a strong hint when something is missing. */
+function WeightBox({ order }: { order: OrderSnapshot }) {
+  const checks = weightChecks(order);
+  if (checks.length === 0) return null;
+  return (
+    <>
+      {checks.map((c, i) => (
+        <div key={c.shipmentId ?? i} className={`return-box weight-box ${TONE_CLASS[c.tone]}`}>
+          <div className="row wrap">
+            <h4>Gewicht{checks.length > 1 && c.shipmentNumber ? ` ${c.shipmentNumber}` : ""}</h4>
+            <span className={`pill ${TONE_CLASS[c.tone]}`}>{c.label}</span>
+          </div>
+          {(c.expectedKg !== undefined || c.actualKg !== undefined) && (
+            <p className="small">
+              Soll (Artikel) <strong>{c.expectedKg !== undefined ? formatKg(c.expectedKg) : "unbekannt"}</strong> · Paket <strong>{c.actualKg !== undefined ? formatKg(c.actualKg) : "kein Gewicht"}</strong>
+              {c.percent !== undefined && <span className="muted"> ({c.percent} %)</span>}
+            </p>
+          )}
+          <p className="small">{c.advice}</p>
+        </div>
+      ))}
+      <p className="muted small">{WEIGHT_SOURCE_NOTE} Paketgewicht inklusive Verpackung. Ob es gewogen oder berechnet wurde, zeigt weclapp nicht an.</p>
+    </>
+  );
+}
+
 function OrderDetails({ order, links, invoices, returns }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode; returns: React.ReactNode }) {
   return (
     <div className="order">
@@ -628,7 +656,10 @@ function OrderDetails({ order, links, invoices, returns }: { order: OrderSnapsho
       {returns}
       <h4>Positionen</h4>
       <ul>
-        {order.lines.map((l) => <li key={l.id}>{l.quantity} × {l.title} <span className="muted small">(versendet {l.shippedQuantity ?? 0}, retourniert {l.returnedQuantity ?? 0})</span></li>)}
+        {order.lines.map((l) => {
+          const unitKg = l.grossWeightKg ?? l.netWeightKg;
+          return <li key={l.id}>{l.quantity} × {l.title} <span className="muted small">(versendet {l.shippedQuantity ?? 0}, retourniert {l.returnedQuantity ?? 0}{unitKg ? `, je ${formatKg(unitKg)}` : ""})</span></li>;
+        })}
       </ul>
       <h4>Lieferungen ({order.shipments.length})</h4>
       {order.shipments.length === 0 && <p className="muted small">Keine Lieferung in weclapp angelegt.</p>}
@@ -645,12 +676,14 @@ function OrderDetails({ order, links, invoices, returns }: { order: OrderSnapsho
                   Paket {i + 1}: {p.trackingId ?? "ohne Nummer"}{" "}
                   {trackingHref(p.trackingUrl, p.trackingId) ? <a href={trackingHref(p.trackingUrl, p.trackingId)} target="_blank" rel="noreferrer noopener">Trackinglink</a> : <span className="muted">kein Link</span>}
                   {p.source === "legacy_package_tracking" && <span className="muted"> (altes Einzelfeld)</span>}
+                  {p.weightKg !== undefined && <span className="muted"> · {formatKg(p.weightKg)}</span>}
                 </li>
               ))}
             </ul>
           )}
         </div>
       ))}
+      <WeightBox order={order} />
       <p className="muted small">ERP-Status ist eine Buchung in weclapp, kein Scan des Paketdienstes. Ein Trackinglink belegt weder Versand noch Zustellung.</p>
       {invoices}
       <p className="muted small">Abgerufen: {fmtDate(order.retrievedAt)}</p>

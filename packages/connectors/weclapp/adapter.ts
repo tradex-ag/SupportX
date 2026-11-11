@@ -88,15 +88,30 @@ export function scopeMatches(order: Json, scope: OrderScopeRule): boolean {
   }
 }
 
+/**
+ * A weight in kg, or undefined when unset or not positive. weclapp sends weights
+ * as decimal strings in kg (article: articleGrossWeight / articleNetWeight;
+ * shipment: packageWeight). The parcel field name in API v2 is not confirmed on a
+ * live tenant yet, so `weight` and `packageWeight` are both read.
+ */
+export function kg(value: unknown): number | undefined {
+  const n = num(value);
+  return n !== undefined && n > 0 && n < 10_000 ? n : undefined;
+}
+
 function mapParcels(shipment: Json): ParcelFact[] {
-  const parcels: ParcelFact[] = arr(shipment.parcels).map((p) => ({
-    id: str(p.id),
-    trackingId: str(p.trackingId),
-    trackingUrl: trackingHref(str(p.trackingUrl), str(p.trackingId)),
-    carrierId: str(p.shippingCarrierId),
-    reference: str(p.reference),
-    source: "parcels" as const,
-  }));
+  const parcels: ParcelFact[] = arr(shipment.parcels).map((p) => {
+    const weightKg = kg(p.weight) ?? kg(p.packageWeight);
+    return {
+      id: str(p.id),
+      trackingId: str(p.trackingId),
+      trackingUrl: trackingHref(str(p.trackingUrl), str(p.trackingId)),
+      carrierId: str(p.shippingCarrierId),
+      reference: str(p.reference),
+      source: "parcels" as const,
+      ...(weightKg !== undefined ? { weightKg } : {}),
+    };
+  });
   // Deprecated single-package fields are only used when no parcel list exists,
   // and are labelled as such. Several parcels are never collapsed into one.
   if (parcels.length === 0 && (str(shipment.packageTrackingNumber) || str(shipment.packageTrackingUrl))) {
@@ -107,7 +122,7 @@ function mapParcels(shipment: Json): ParcelFact[] {
       source: "legacy_package_tracking",
     });
   }
-  return parcels.filter((p) => p.trackingId || p.trackingUrl || p.id);
+  return parcels.filter((p) => p.trackingId || p.trackingUrl || p.id || p.weightKg !== undefined);
 }
 
 export function mapShipment(shipment: Json, linesById: Map<string, OrderLineFact>): ShipmentFact {
@@ -133,6 +148,7 @@ export function mapShipment(shipment: Json, linesById: Map<string, OrderLineFact
       };
     }),
     parcels: mapParcels(shipment),
+    ...(kg(shipment.packageWeight) !== undefined ? { weightKg: kg(shipment.packageWeight) } : {}),
     ...(num(shipment.shippingReturnLabelsCount) ? { returnLabels: num(shipment.shippingReturnLabelsCount) } : {}),
   };
 }
@@ -175,19 +191,26 @@ export interface ReturnsRead {
   error?: string;
 }
 
-export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retrievedAt: string, articles: Json[] = [], returns?: ReturnsRead): OrderRecord {
+export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retrievedAt: string, articles: Json[] = [], returns?: ReturnsRead, weightsRead = true): OrderRecord {
   const articlesById = new Map(articles.map((a) => [String(a.id), a]));
-  const lines: OrderLineFact[] = arr(order.orderItems).map((item, i) => ({
-    id: String(item.id ?? `line-${i + 1}`),
-    position: num(item.positionNumber),
-    title: str(item.title) ?? str(item.description) ?? "Artikel",
-    articleId: str(item.articleId),
-    articleNumber: str(item.articleNumber) ?? str(articlesById.get(str(item.articleId) ?? "")?.articleNumber),
-    articleName: str(articlesById.get(str(item.articleId) ?? "")?.name),
-    quantity: num(item.quantity) ?? 0,
-    shippedQuantity: num(item.shippedQuantity),
-    returnedQuantity: num(item.returnedQuantity),
-  }));
+  const lines: OrderLineFact[] = arr(order.orderItems).map((item, i) => {
+    const article = articlesById.get(str(item.articleId) ?? "");
+    const grossWeightKg = kg(article?.articleGrossWeight);
+    const netWeightKg = kg(article?.articleNetWeight);
+    return {
+      id: String(item.id ?? `line-${i + 1}`),
+      position: num(item.positionNumber),
+      title: str(item.title) ?? str(item.description) ?? "Artikel",
+      articleId: str(item.articleId),
+      articleNumber: str(item.articleNumber) ?? str(article?.articleNumber),
+      articleName: str(article?.name),
+      quantity: num(item.quantity) ?? 0,
+      shippedQuantity: num(item.shippedQuantity),
+      returnedQuantity: num(item.returnedQuantity),
+      ...(grossWeightKg !== undefined ? { grossWeightKg } : {}),
+      ...(netWeightKg !== undefined ? { netWeightKg } : {}),
+    };
+  });
   const linesById = new Map(lines.map((l) => [l.id, l]));
   const invoiceFacts: InvoiceFact[] = invoices.map((inv) => ({
     id: String(inv.id),
@@ -221,6 +244,7 @@ export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retri
           ...(returns.error ? { returnsError: returns.error } : {}),
         }
       : {}),
+    ...(weightsRead ? { weightsRead: true } : {}),
     retrievedAt,
   };
 }
@@ -299,7 +323,8 @@ export class WeclappOrderProvider implements OrderProvider {
     if (rejected.length) console.warn(`[weclapp] Filter abgelehnt, Daten fehlen evtl. am Auftrag: ${rejected.join(", ")}`);
     const ownShipments = shipments.filter((s) => belongsToOrder(s, id));
     const [articles, returns] = await Promise.all([this.#articles(order), this.#returns(order, ownShipments)]);
-    return mapOrder(order, ownShipments, [...invoices.values()], new Date().toISOString(), articles, returns);
+    // Weights count as read only when every linked article could be read.
+    return mapOrder(order, ownShipments, [...invoices.values()], new Date().toISOString(), articles.rows, returns, !articles.failed);
   }
 
   /**
@@ -348,19 +373,20 @@ export class WeclappOrderProvider implements OrderProvider {
     }
   }
 
-  /** Linked articles, for comparing the order title with the ERP article. Best effort: a failure only drops the comparison. */
-  async #articles(order: Json): Promise<Json[]> {
-    const ids = [...new Set(arr(order.orderItems).map((item) => str(item.articleId)).filter((v): v is string => !!v))].slice(0, 20);
+  /** Linked articles, for comparing the order title and the weight with the ERP article. Best effort: a failure only drops the comparison. */
+  async #articles(order: Json): Promise<{ rows: Json[]; failed: boolean }> {
+    const all = [...new Set(arr(order.orderItems).map((item) => str(item.articleId)).filter((v): v is string => !!v))];
+    const ids = all.slice(0, 20);
     const rows = await Promise.all(
       ids.map(async (articleId) => {
         try {
-          return (await this.#get("article", { "id-eq": articleId, pageSize: "1" })).find((a) => String(a.id) === articleId);
+          return (await this.#get("article", { "id-eq": articleId, pageSize: "1" })).find((a) => String(a.id) === articleId) ?? null;
         } catch {
           return undefined;
         }
       }),
     );
-    return rows.filter((a): a is Json => !!a);
+    return { rows: rows.filter((a): a is Json => !!a), failed: all.length > ids.length || rows.some((a) => a === undefined) };
   }
 
   /**

@@ -172,6 +172,9 @@ export interface OrderLineFact {
   quantity: number;
   shippedQuantity?: number;
   returnedQuantity?: number;
+  /** Weight of one unit from the linked ERP article, in kg (weclapp articleGrossWeight / articleNetWeight). */
+  grossWeightKg?: number;
+  netWeightKg?: number;
 }
 
 export interface ParcelFact {
@@ -182,6 +185,8 @@ export interface ParcelFact {
   reference?: string;
   /** "parcels" (current) or "legacy_package_tracking" (deprecated single field). */
   source: "parcels" | "legacy_package_tracking";
+  /** Weight booked on this parcel in the ERP, in kg. Not a carrier measurement unless the ERP took it from one. */
+  weightKg?: number;
 }
 
 export interface ShipmentFact {
@@ -195,6 +200,8 @@ export interface ShipmentFact {
   deliveryDate?: string;
   items: ReadonlyArray<{ orderLineId?: string; title?: string; quantity: number }>;
   parcels: ReadonlyArray<ParcelFact>;
+  /** Package weight booked on the shipment in the ERP, in kg (weclapp packageWeight). */
+  weightKg?: number;
   /** Return labels weclapp created for this shipment (shippingReturnLabelsCount). A label alone is no return. */
   returnLabels?: number;
 }
@@ -233,6 +240,8 @@ export interface OrderRecord {
   returns?: ReadonlyArray<ReturnFact>;
   /** Reading the returns failed or was refused by the tenant; the list may be incomplete. */
   returnsError?: string;
+  /** True when article and package weights were read; snapshots taken before lack the flag. */
+  weightsRead?: boolean;
   /** When this application fetched the record. Event times are kept per fact. */
   retrievedAt: string;
 }
