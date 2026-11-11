@@ -124,6 +124,18 @@ Alle drei kommen per Schnittstelle, nicht per Mail. Mails der Marktplätze sind 
 
 Versand freischalten wie in Abschnitt 8, mit einer kontrollierten Testantwort im Marktplatz selbst.
 
+## 6b. Amazon-Angebote deaktivieren (optional, Selling Partner API)
+
+Damit lässt sich im Fall ein falsches Amazon-Angebot schließen (z. B. Angebot zeigt 2 statt 1 Flasche). Nachrichten von Amazon laufen weiter über das Postfach; dieser Zugang dient nur dieser einen Aktion.
+
+1. **SP-API-App** (Developer Central des Betreibers): Die App braucht die Rolle **„Product Listing“**. Eine bestehende private oder öffentliche App kann genutzt werden, wenn sie diese Rolle hat. Client-ID und Client-Secret stehen unter „LWA-Zugangsdaten“.
+2. **Autorisierung durch den Verkäufer:** Der Verkäufer autorisiert die App einmal für sein Verkäuferkonto (Seller Central → Apps und Services → Apps entwickeln bzw. Autorisierungslink der App). Dabei entsteht der **Refresh-Token** (beginnt mit `Atzr|`).
+3. **Verkäufer-ID** (Händlertoken): Seller Central → Einstellungen → Kontoinformationen → Händlertoken.
+4. In SupportX unter **Einstellungen → Amazon-Angebote** Region, Marktplätze, Verkäufer-ID, Client-ID, Client-Secret und Refresh-Token eintragen, speichern, **„Verbindung testen“**. Danach sind die Werte nur noch maskiert sichtbar; ändern geht nur über „Ändern“ (leere Felder behalten den gespeicherten Wert).
+5. Im Fall (Amazon-Fälle) die Karte **„Amazon-Angebot“**: SKU prüfen (Vorschlag = Artikelnummer aus weclapp, muss nicht der Amazon-SKU entsprechen), „Angebot bei Amazon prüfen“, dann „Angebot deaktivieren …“ und im Dialog bestätigen.
+
+SupportX setzt dabei ein Enddatum in der Vergangenheit am Angebot; Preis, Bestand und Texte bleiben. Wieder öffnen: in Seller Central das Enddatum des Angebots entfernen. Bis Amazon die Änderung verarbeitet hat, können einige Minuten vergehen. Bisher nur gegen einen lokalen Testdouble geprüft, noch nicht mit einem echten Konto.
+
 ## 7. Claude als KI-Anbieter
 
 ```

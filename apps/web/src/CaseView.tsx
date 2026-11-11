@@ -9,6 +9,7 @@ import { trackingHref } from "../../../packages/core/tracking.ts";
 import { deadlineState } from "../../../packages/core/deadline.ts";
 import { formatKg, weightChecks, WEIGHT_SOURCE_NOTE } from "../../../packages/core/weight-check.ts";
 import { buildTimeline } from "../../../packages/core/timeline.ts";
+import { AmazonOfferCard, LISTING_STATE, listingActionText, type ListingAction } from "./AmazonOffer.tsx";
 import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -28,7 +29,7 @@ interface Shipment {
 }
 interface OrderSnapshot {
   id: string; orderNumber?: string; orderNumberAtCustomer?: string; orderDate?: string; status?: string; salesChannel?: string;
-  lines: Array<{ id: string; title: string; quantity: number; shippedQuantity?: number; returnedQuantity?: number; grossWeightKg?: number; netWeightKg?: number }>;
+  lines: Array<{ id: string; title: string; articleNumber?: string; quantity: number; shippedQuantity?: number; returnedQuantity?: number; grossWeightKg?: number; netWeightKg?: number }>;
   shipments: Shipment[];
   invoices: Array<{ id: string; invoiceNumber?: string; invoiceDate?: string; status?: string; paymentStatus?: string; type?: string }>;
   returns?: ReturnFact[];
@@ -64,7 +65,18 @@ interface CaseData {
   caseFiles?: CaseFile[];
   /** Invoice numbers of the linked order that can be sent. */
   invoices?: string[];
+  /** Amazon offers closed (or tried) from this case. */
+  listingActions?: ListingAction[];
+  /** Set when the workspace has an Amazon SP-API access: the marketplaces it may change. */
+  amazonListings?: { marketplaceIds: string[] } | null;
 }
+
+/** Readable names for the Protokoll; unknown actions show their technical name. */
+const AUDIT_LABEL: Record<string, string> = {
+  "amazon.offer_close_accepted": "Amazon-Angebot deaktiviert (von Amazon angenommen)",
+  "amazon.offer_close_rejected": "Amazon-Angebot deaktivieren: von Amazon abgelehnt",
+  "amazon.offer_close_uncertain": "Amazon-Angebot deaktivieren: Antwort unklar",
+};
 
 const KIND_LABEL: Record<string, string> = { customer: "Kunde", echo: "unsere Antwort", manual_external: "außerhalb gesendet", platform_notice: "Systemhinweis" };
 const RISK_LABEL: Record<string, string> = { health: "Gesundheitsfrage", legal: "Rechtliches", refund: "Erstattung", replacement: "Ersatz", cancellation: "Storno", delivery_disputed: "Zustellung bestritten", identity_uncertain: "Identität unklar", abusive: "beleidigend", other: "Sonstiges" };
@@ -153,12 +165,19 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
   const resolveOutbox = (id: string, resolution: "was_sent" | "was_not_sent") => act(() => api("POST", `${base}/outbox/${id}/resolve`, { resolution }));
   const resolveForward = (id: string, action: "check" | "was_sent" | "was_not_sent") =>
     act(() => api<{ state: string }>("POST", `${base}/forwards/${id}/resolve`, { action }), (r) => (r as { state: string }).state === "confirmed" ? "Weiterleitung in „Gesendete Elemente“ gefunden." : action === "check" ? "Noch nicht in „Gesendete Elemente“ gefunden." : "Geklärt.");
+  // Our actions at the marketplace, between the messages at the time they happened.
+  const actionsAt = (data.listingActions ?? []).map((a) => ({ at: new Date(a.created_at).getTime(), a }));
   const messages = (
     <section className="card">
-      <h3>Verlauf ({timeline.length})</h3>
+      <h3>Verlauf ({timeline.length + actionsAt.length})</h3>
       {(data.relatedMessages?.length ?? 0) > 0 && <p className="muted small">Mit Nachrichten aus anderen Fällen desselben Kunden bzw. derselben Bestellung.</p>}
       <div className="chat">
-        {timeline.map((e) => e.type === "reply"
+        {[
+          ...timeline.map((e, i) => ({ at: new Date(e.at).getTime(), i, e, a: null })),
+          ...actionsAt.map(({ at, a }, i) => ({ at, i: timeline.length + i, e: null, a })),
+        ].sort((x, y) => x.at - y.at || x.i - y.i).map(({ e, a }) => a ? <ActionEntry key={`a:${a.id}`} a={a} />
+          : !e ? null
+          : e.type === "reply"
           ? <ReplyBubble key={`o:${e.reply.id}`} reply={e.reply} echoed={!!e.echoId} canEdit={canEdit} onResolve={resolveOutbox} />
           : (() => {
             const m = e.message;
@@ -313,6 +332,18 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
             />
           </section>
 
+          {data.amazonListings && (c.source_platform === "amazon" || (data.listingActions?.length ?? 0) > 0) && (
+            <AmazonOfferCard
+              key={caseId}
+              base={base}
+              caseId={caseId}
+              marketplaceIds={data.amazonListings.marketplaceIds}
+              skus={[...new Set((data.orderLink?.status === "unique" ? data.orderLink.snapshot?.lines ?? [] : []).map((l) => l.articleNumber).filter((x): x is string => !!x))]}
+              actions={data.listingActions ?? []}
+              canEdit={canEdit}
+              onDone={() => { void load(); onChanged(); }}
+            />
+          )}
           <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note }), "Gespeichert.")} />
           <CustomerHistory history={data.customerHistory} onOpen={onOpenCase} />
           {canEdit && (
@@ -336,7 +367,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
             <summary><h3>Protokoll</h3></summary>
             <ul className="history">
               {data.history.map((h, i) => (
-                <li key={i}><span className="muted small">{fmtDate(h.created_at)}</span> {h.action} <span className="muted small">({h.actor_type})</span></li>
+                <li key={i}><span className="muted small">{fmtDate(h.created_at)}</span> {AUDIT_LABEL[h.action] ?? h.action} <span className="muted small">({h.actor_type})</span></li>
               ))}
             </ul>
           </details>
@@ -344,6 +375,16 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
       </div>
       )}
     </div>
+  );
+}
+
+function ActionEntry({ a }: { a: ListingAction }) {
+  return (
+    <article className="msg action">
+      <div className="row small muted"><span>SupportX, Aktion bei Amazon</span><span>{fmtDate(a.created_at)}</span></div>
+      <div>{listingActionText(a)} <span className={`pill ${LISTING_STATE[a.state].tone}`}>{LISTING_STATE[a.state].label}</span></div>
+      {a.error && <div className="small muted">{a.error}</div>}
+    </article>
   );
 }
 

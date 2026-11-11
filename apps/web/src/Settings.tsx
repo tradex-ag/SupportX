@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AmazonListingsCard } from "./AmazonListingsSettings.tsx";
 import { api, fmtDate, PLATFORM_LABEL } from "./api.ts";
 import { DEADLINE_PLATFORMS, DEFAULT_REPLY_DEADLINES, MAX_DEADLINE_HOURS } from "../../../packages/core/deadline.ts";
 import { SNIPPET_PLACEHOLDERS } from "../../../packages/core/snippet-placeholders.ts";
@@ -140,6 +141,8 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
           </SetupCard>
         );
       })}
+
+      <AmazonListingsCard base={base} owner={owner} />
 
       <h2 className="settings-title">Weitere Einstellungen</h2>
       {owner && (
