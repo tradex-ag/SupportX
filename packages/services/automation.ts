@@ -119,7 +119,7 @@ export async function autoParcelStatus(ctx: AppContext, workspaceId: string, con
   }
   const note = (text: string | null) => ctx.db.query("UPDATE conversations SET last_error = $3 WHERE workspace_id = $1 AND id = $2", [workspaceId, conversationId, text]);
   if (reasons.length > 0) {
-    await note(`Paketstatus vorbereitet, nicht automatisch gesendet: ${reasons.join("; ")}. Bitte prüfen und selbst freigeben.`);
+    await note(`Paketstatus vorbereitet, nicht automatisch gesendet: ${reasons.join("; ")}. Bitte prüfen und selbst senden.`);
     return "drafted";
   }
   const approvalId = await approveByRule(ctx, workspaceId, draftId, AUTO_RULE);

@@ -354,30 +354,51 @@ export async function polishDraft(ctx: AppContext, actor: Actor, draftId: string
 }
 
 /**
- * Approve the exact current draft revision. The approval binds draft version,
- * conversation version and a hash of the text, and expires.
+ * "Senden" in the case view: one click, no separate approval step (since 0.9.4).
+ * In one transaction the exact draft revision the person sees is recorded as sent
+ * by them (internal send record bound to draft version, case version and text hash)
+ * and put into the outbox. Every guard against a wrong send stays: version conflict,
+ * newer customer message, blocking issues, acknowledged hints, send blockers,
+ * one reply per customer message and the recipient taken from the original message.
+ * If anything fails, nothing is recorded.
+ */
+export async function sendDraft(ctx: AppContext, actor: Actor, draftId: string, input: { expectedVersion: number; acknowledgeWarnings: boolean }): Promise<string> {
+  requireRole(actor, ["owner", "agent"]);
+  if (actor.type !== "user") throw new ServiceError(403, "FORBIDDEN", "Senden löst nur ein Mensch aus.");
+  return withTx(ctx.db, async (tx) => {
+    const approvalId = await approveInTx(ctx, tx, actor, draftId, input);
+    return queueInTx(ctx, tx, actor, approvalId);
+  });
+}
+
+/**
+ * Internal send record for the exact current draft revision. It binds draft version,
+ * conversation version and a hash of the text, so the worker refuses to dispatch a
+ * text or case that changed after the click. Used by sendDraft and kept for tests.
  */
 export async function approveDraft(ctx: AppContext, actor: Actor, draftId: string, input: { expectedVersion: number; acknowledgeWarnings: boolean }): Promise<string> {
   requireRole(actor, ["owner", "agent"]);
-  if (actor.type !== "user") throw new ServiceError(403, "FORBIDDEN", "Freigaben erteilt nur ein Mensch.");
-  return withTx(ctx.db, async (tx) => {
-    const draft = await loadDraft(tx, actor.workspaceId, draftId, true);
-    const conv = await loadConversation(tx, actor.workspaceId, draft.conversation_id, true);
-    if (!["proposed", "edited"].includes(draft.status)) throw new ServiceError(409, "DRAFT_CLOSED", "Dieser Entwurf ist nicht mehr aktuell.");
-    if (draft.version !== input.expectedVersion) throw new ServiceError(409, "VERSION_CONFLICT", "Der Entwurf wurde zwischenzeitlich geändert.");
-    if (draft.inbound_message_id !== conv.latest_inbound_message_id) throw new ServiceError(409, "STALE_DRAFT", "Es ist eine neuere Kundennachricht eingegangen.");
-    if (hasBlockingIssue(draft.issues)) throw new ServiceError(422, "BLOCKING_ISSUES", "Der Entwurf enthält unbelegte Aussagen und kann so nicht freigegeben werden.");
-    if (draft.issues.length > 0 && !input.acknowledgeWarnings) throw new ServiceError(422, "WARNINGS_NOT_ACKNOWLEDGED", "Bitte die Hinweise zum Entwurf bestätigen.");
-    await tx.query("UPDATE approvals SET invalidated_at = now(), invalidation_reason = 'Durch neue Freigabe ersetzt' WHERE workspace_id = $1 AND draft_id = $2 AND invalidated_at IS NULL", [actor.workspaceId, draftId]);
-    const approval = await one<{ id: string }>(
-      tx,
-      `INSERT INTO approvals (workspace_id, conversation_id, draft_id, draft_version, conversation_version, body_sha256, approved_by, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + ($8::int * interval '1 minute')) RETURNING id`,
-      [actor.workspaceId, conv.id, draftId, draft.version, conv.version, sha256(draft.body), actor.userId, ctx.config.APPROVAL_TTL_MIN],
-    );
-    await audit(tx, actor, "draft.approved", "draft", draftId, { approvalId: approval!.id, draftVersion: draft.version, conversationVersion: conv.version });
-    return approval!.id;
-  });
+  if (actor.type !== "user") throw new ServiceError(403, "FORBIDDEN", "Senden löst nur ein Mensch aus.");
+  return withTx(ctx.db, (tx) => approveInTx(ctx, tx, actor, draftId, input));
+}
+
+async function approveInTx(ctx: AppContext, tx: Tx, actor: Extract<Actor, { type: "user" }>, draftId: string, input: { expectedVersion: number; acknowledgeWarnings: boolean }): Promise<string> {
+  const draft = await loadDraft(tx, actor.workspaceId, draftId, true);
+  const conv = await loadConversation(tx, actor.workspaceId, draft.conversation_id, true);
+  if (!["proposed", "edited"].includes(draft.status)) throw new ServiceError(409, "DRAFT_CLOSED", "Dieser Entwurf ist nicht mehr aktuell.");
+  if (draft.version !== input.expectedVersion) throw new ServiceError(409, "VERSION_CONFLICT", "Der Entwurf wurde zwischenzeitlich geändert.");
+  if (draft.inbound_message_id !== conv.latest_inbound_message_id) throw new ServiceError(409, "STALE_DRAFT", "Es ist eine neuere Kundennachricht eingegangen.");
+  if (hasBlockingIssue(draft.issues)) throw new ServiceError(422, "BLOCKING_ISSUES", "Der Entwurf enthält unbelegte Aussagen und kann so nicht gesendet werden.");
+  if (draft.issues.length > 0 && !input.acknowledgeWarnings) throw new ServiceError(422, "WARNINGS_NOT_ACKNOWLEDGED", "Bitte die Hinweise zum Entwurf bestätigen.");
+  await tx.query("UPDATE approvals SET invalidated_at = now(), invalidation_reason = 'Durch neuen Sendeauftrag ersetzt' WHERE workspace_id = $1 AND draft_id = $2 AND invalidated_at IS NULL", [actor.workspaceId, draftId]);
+  const approval = await one<{ id: string }>(
+    tx,
+    `INSERT INTO approvals (workspace_id, conversation_id, draft_id, draft_version, conversation_version, body_sha256, approved_by, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now() + ($8::int * interval '1 minute')) RETURNING id`,
+    [actor.workspaceId, conv.id, draftId, draft.version, conv.version, sha256(draft.body), actor.userId, ctx.config.APPROVAL_TTL_MIN],
+  );
+  await audit(tx, actor, "draft.approved", "draft", draftId, { approvalId: approval!.id, draftVersion: draft.version, conversationVersion: conv.version });
+  return approval!.id;
 }
 
 /**
@@ -391,7 +412,7 @@ export async function approveByRule(ctx: AppContext, workspaceId: string, draftI
     const conv = await loadConversation(tx, workspaceId, draft.conversation_id, true);
     if (!["proposed", "edited"].includes(draft.status)) throw new ServiceError(409, "DRAFT_CLOSED", "Dieser Entwurf ist nicht mehr aktuell.");
     if (draft.inbound_message_id !== conv.latest_inbound_message_id) throw new ServiceError(409, "STALE_DRAFT", "Es ist eine neuere Kundennachricht eingegangen.");
-    if (draft.issues.length > 0) throw new ServiceError(422, "NEEDS_PERSON", "Der Entwurf hat Hinweise und braucht eine Freigabe durch einen Menschen.");
+    if (draft.issues.length > 0) throw new ServiceError(422, "NEEDS_PERSON", "Der Entwurf hat Hinweise und muss von einem Menschen gesendet werden.");
     const approval = await one<{ id: string }>(
       tx,
       `INSERT INTO approvals (workspace_id, conversation_id, draft_id, draft_version, conversation_version, body_sha256, approved_by, auto_rule, expires_at)
@@ -448,13 +469,13 @@ async function checkApproval(tx: Tx, workspaceId: string, approvalId: string): P
     "SELECT * FROM approvals WHERE workspace_id = $1 AND id = $2",
     [workspaceId, approvalId],
   );
-  if (!approval) return { ok: false, reason: "Freigabe nicht gefunden." };
-  if (approval.invalidated_at) return { ok: false, reason: `Freigabe ungültig: ${approval.invalidation_reason ?? "zurückgezogen"}.` };
-  if (approval.expires_at.getTime() < Date.now()) return { ok: false, reason: "Freigabe abgelaufen." };
+  if (!approval) return { ok: false, reason: "Sendeauftrag nicht gefunden." };
+  if (approval.invalidated_at) return { ok: false, reason: `Sendeauftrag ungültig: ${approval.invalidation_reason ?? "zurückgezogen"}.` };
+  if (approval.expires_at.getTime() < Date.now()) return { ok: false, reason: "Sendeauftrag zu alt (nicht rechtzeitig verschickt). Bitte erneut senden." };
   const draft = await loadDraft(tx, workspaceId, approval.draft_id);
   const conv = await loadConversation(tx, workspaceId, draft.conversation_id, true);
-  if (draft.version !== approval.draft_version || sha256(draft.body) !== approval.body_sha256) return { ok: false, reason: "Entwurf wurde nach der Freigabe geändert." };
-  if (conv.version !== approval.conversation_version) return { ok: false, reason: "Der Fall hat sich nach der Freigabe geändert (neue Nachricht oder Zuordnung)." };
+  if (draft.version !== approval.draft_version || sha256(draft.body) !== approval.body_sha256) return { ok: false, reason: "Entwurf wurde nach dem Klick auf Senden geändert." };
+  if (conv.version !== approval.conversation_version) return { ok: false, reason: "Der Fall hat sich nach dem Klick auf Senden geändert (neue Nachricht oder Zuordnung)." };
   if (draft.inbound_message_id !== conv.latest_inbound_message_id) return { ok: false, reason: "Es ist eine neuere Kundennachricht eingegangen." };
   return { ok: true, draft, conv };
 }
@@ -462,31 +483,33 @@ async function checkApproval(tx: Tx, workspaceId: string, approvalId: string): P
 /** Queue an approved reply. Fails closed on every stale or unverified precondition. */
 export async function queueReply(ctx: AppContext, actor: Actor, approvalId: string): Promise<string> {
   requireRole(actor, ["owner", "agent"]);
-  return withTx(ctx.db, async (tx) => {
-    const check = await checkApproval(tx, actor.workspaceId, approvalId);
-    if (!check.ok || !check.draft || !check.conv) throw new ServiceError(409, "APPROVAL_INVALID", check.reason ?? "Freigabe ungültig.");
-    const status = await sendBlockers(ctx, tx, actor.workspaceId, check.conv.id);
-    if (!status.allowed) throw new ServiceError(409, "SEND_BLOCKED", status.blockers.join(" "));
-    const inbound = await one<{ reply_to: Array<{ address: string }>; from_address: string }>(tx, "SELECT reply_to, from_address FROM messages WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, check.conv.latest_inbound_message_id]);
-    // Recipient is derived from the original message by the transport, never from draft text.
-    const expectedRecipient = inbound?.reply_to[0]?.address ?? inbound?.from_address ?? null;
-    let outboxId: string;
-    try {
-      const row = await one<{ id: string }>(
-        tx,
-        `INSERT INTO outbox (workspace_id, conversation_id, connection_id, draft_id, draft_version, approval_id, in_reply_to_message_id, idempotency_key, body, expected_recipient, document_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid[]) RETURNING id`,
-        [actor.workspaceId, check.conv.id, check.conv.connection_id, check.draft.id, check.draft.version, approvalId, check.conv.latest_inbound_message_id, idempotencyKey(check.conv.id, check.conv.latest_inbound_message_id!), check.draft.body, expectedRecipient, check.draft.document_ids ?? []],
-      );
-      outboxId = row!.id;
-    } catch (error) {
-      if ((error as { code?: string }).code === "23505") throw new ServiceError(409, "DUPLICATE_REPLY", "Auf diese Kundennachricht wurde bereits geantwortet oder ein Versand läuft.");
-      throw error;
-    }
-    await enqueue(tx, { workspaceId: actor.workspaceId, type: "outbox.dispatch", payload: { outboxId }, dedupeKey: `outbox.dispatch:${outboxId}`, maxAttempts: 3 });
-    await audit(tx, actor, "reply.queued", "outbox", outboxId, { approvalId, draftId: check.draft.id });
-    return outboxId;
-  });
+  return withTx(ctx.db, (tx) => queueInTx(ctx, tx, actor, approvalId));
+}
+
+async function queueInTx(ctx: AppContext, tx: Tx, actor: Actor, approvalId: string): Promise<string> {
+  const check = await checkApproval(tx, actor.workspaceId, approvalId);
+  if (!check.ok || !check.draft || !check.conv) throw new ServiceError(409, "APPROVAL_INVALID", check.reason ?? "Sendeauftrag ungültig.");
+  const status = await sendBlockers(ctx, tx, actor.workspaceId, check.conv.id);
+  if (!status.allowed) throw new ServiceError(409, "SEND_BLOCKED", status.blockers.join(" "));
+  const inbound = await one<{ reply_to: Array<{ address: string }>; from_address: string }>(tx, "SELECT reply_to, from_address FROM messages WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, check.conv.latest_inbound_message_id]);
+  // Recipient is derived from the original message by the transport, never from draft text.
+  const expectedRecipient = inbound?.reply_to[0]?.address ?? inbound?.from_address ?? null;
+  let outboxId: string;
+  try {
+    const row = await one<{ id: string }>(
+      tx,
+      `INSERT INTO outbox (workspace_id, conversation_id, connection_id, draft_id, draft_version, approval_id, in_reply_to_message_id, idempotency_key, body, expected_recipient, document_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid[]) RETURNING id`,
+      [actor.workspaceId, check.conv.id, check.conv.connection_id, check.draft.id, check.draft.version, approvalId, check.conv.latest_inbound_message_id, idempotencyKey(check.conv.id, check.conv.latest_inbound_message_id!), check.draft.body, expectedRecipient, check.draft.document_ids ?? []],
+    );
+    outboxId = row!.id;
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") throw new ServiceError(409, "DUPLICATE_REPLY", "Auf diese Kundennachricht wurde bereits geantwortet oder ein Versand läuft.");
+    throw error;
+  }
+  await enqueue(tx, { workspaceId: actor.workspaceId, type: "outbox.dispatch", payload: { outboxId }, dedupeKey: `outbox.dispatch:${outboxId}`, maxAttempts: 3 });
+  await audit(tx, actor, "reply.queued", "outbox", outboxId, { approvalId, draftId: check.draft.id });
+  return outboxId;
 }
 
 interface OutboxRow {
@@ -620,7 +643,7 @@ export async function resolveUncertainSend(ctx: AppContext, actor: Actor, outbox
       await tx.query("UPDATE drafts SET status = 'sent', updated_at = now() WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, row.draft_id]);
     } else {
       await tx.query("UPDATE outbox SET state = 'failed', resolved_by = $3, last_error = 'Manuell als nicht gesendet geklärt', updated_at = now() WHERE id = $2 AND workspace_id = $1", [actor.workspaceId, outboxId, actorId(actor)]);
-      await tx.query("UPDATE approvals SET invalidated_at = now(), invalidation_reason = 'Versand nicht erfolgt; neue Freigabe nötig' WHERE workspace_id = $1 AND id = $2 AND invalidated_at IS NULL", [actor.workspaceId, row.approval_id]);
+      await tx.query("UPDATE approvals SET invalidated_at = now(), invalidation_reason = 'Versand nicht erfolgt; bitte erneut senden' WHERE workspace_id = $1 AND id = $2 AND invalidated_at IS NULL", [actor.workspaceId, row.approval_id]);
     }
     await audit(tx, actor, "reply.uncertain_resolved", "outbox", outboxId, { resolution });
   });

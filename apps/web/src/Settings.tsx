@@ -260,7 +260,7 @@ function SetupCard({ setup, owner, onAction, graphMailbox, onSending, serverSend
         <div className="send-line">
           <span>Antworten senden: <strong>{setup.sending.on ? "freigeschaltet" : "aus, nur Entwürfe"}</strong>
             {setup.sending.on && serverSendOff && <span className="warn-text"> · auf dem Server noch gesperrt</span>}
-            {setup.sending.on && <span className="muted small"> · jede Antwort erst nach deiner Freigabe im Fall</span>}
+            {setup.sending.on && <span className="muted small"> · jede Antwort erst mit deinem Klick auf Senden im Fall</span>}
           </span>
           {owner && onSending && <button className={setup.sending.on ? "" : "primary"} onClick={() => onSending(!setup.sending!.on)}>{setup.sending.on ? "Versand sperren" : "Versand freischalten"}</button>}
         </div>
@@ -808,7 +808,7 @@ function SnippetsCard({ base, canEdit }: { base: string; canEdit: boolean }) {
   return (
     <section className="card">
       <h3>Textbausteine</h3>
-      <p className="muted small">Antworten, die ihr oft schreibt. Im Fall unter „Antwort“ wählen oder in einen Entwurf einfügen. Platzhalter werden aus dem Fall und aus weclapp gefüllt, ohne KI-Kosten: {Object.entries(SNIPPET_PLACEHOLDERS).map(([k, v], i) => <span key={k}>{i ? ", " : ""}<code title={v}>{`{${k}}`}</code></span>)}. Fehlt ein Wert, bleibt der Platzhalter stehen und der Entwurf lässt sich erst nach dem Ausfüllen freigeben.</p>
+      <p className="muted small">Antworten, die ihr oft schreibt. Im Fall unter „Antwort“ wählen oder in einen Entwurf einfügen. Platzhalter werden aus dem Fall und aus weclapp gefüllt, ohne KI-Kosten: {Object.entries(SNIPPET_PLACEHOLDERS).map(([k, v], i) => <span key={k}>{i ? ", " : ""}<code title={v}>{`{${k}}`}</code></span>)}. Fehlt ein Wert, bleibt der Platzhalter stehen und der Entwurf lässt sich erst nach dem Ausfüllen senden.</p>
       {list === null ? <p className="small muted">Lädt …</p> : list.length === 0 ? <p className="small muted">Noch keine Textbausteine.</p> : (
         <ul className="snippet-list">
           {list.map((sn) => (

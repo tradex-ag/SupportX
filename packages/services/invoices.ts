@@ -245,7 +245,7 @@ export async function autoInvoice(ctx: AppContext, workspaceId: string, conversa
     if (!blockers.allowed) reasons.push(...blockers.blockers);
   }
   if (reasons.length > 0) {
-    await note(`Rechnung angehängt, nicht automatisch gesendet: ${reasons.join("; ")}. Bitte prüfen und selbst freigeben.`);
+    await note(`Rechnung angehängt, nicht automatisch gesendet: ${reasons.join("; ")}. Bitte prüfen und selbst senden.`);
     return "drafted";
   }
   const approvalId = await approveByRule(ctx, workspaceId, result.draftId, AUTO_RULE);
