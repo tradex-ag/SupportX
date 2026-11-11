@@ -7,7 +7,7 @@ import { actorId, requireRole, ServiceError, type Actor, type AppContext } from 
 import { aiWriter, sendBlockers, titleHintsFor } from "./replies.ts";
 import { listCaseFiles, REPLY_FILES } from "./documents.ts";
 import { invoiceSummary } from "./invoices.ts";
-import { OWN_COPY_REASON, ownCopyText } from "../core/category.ts";
+import { OWN_COPY_REASON, SYSTEM_NOTICE_REASON, ownCopyText } from "../core/category.ts";
 import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { deadlineState, MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
@@ -128,23 +128,25 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const related = await many(
     ctx.db,
     `SELECT m.id, m.direction, m.kind, m.from_address, m.from_name, m.subject, m.body_text, m.has_attachments, m.received_at, m.removed_remotely_at,
-            o.id AS conversation_id, o.subject AS conversation_subject, (o.category_reason = $5) AS own_copy
+            o.id AS conversation_id, o.subject AS conversation_subject, (o.category_reason = $5) AS own_copy, (o.category_reason = $6) AS system_notice
        FROM conversations o
        JOIN messages m ON m.workspace_id = o.workspace_id AND m.conversation_id = o.id
-      WHERE o.workspace_id = $1 AND o.id <> $2 AND (o.category = 'support' OR o.category_reason = $5)
+      WHERE o.workspace_id = $1 AND o.id <> $2 AND (o.category = 'support' OR o.category_reason IN ($5, $6))
         AND (
-          ($3::text IS NOT NULL AND o.customer_address = $3)
+          -- Marketplace notices all come from one system address: only the order links them.
+          ($3::text IS NOT NULL AND o.customer_address = $3 AND o.category_reason IS DISTINCT FROM $6)
           OR EXISTS (SELECT 1 FROM jsonb_array_elements(o.order_references) mine(ref) WHERE mine.ref->>'value' IN (SELECT r->>'value' FROM jsonb_array_elements($4::jsonb) r))
           OR EXISTS (SELECT 1 FROM order_links a JOIN order_links b ON b.workspace_id = a.workspace_id AND b.external_order_id = a.external_order_id AND b.is_current
                       WHERE a.workspace_id = $1 AND a.conversation_id = o.id AND a.is_current AND a.external_order_id IS NOT NULL AND b.conversation_id = $2)
         )
       ORDER BY m.received_at DESC
       LIMIT 50`,
-    [ws, conversationId, c.customer_address, JSON.stringify(Array.isArray(c.order_references) ? c.order_references : []), OWN_COPY_REASON],
+    [ws, conversationId, c.customer_address, JSON.stringify(Array.isArray(c.order_references) ? c.order_references : []), OWN_COPY_REASON, SYSTEM_NOTICE_REASON],
   );
   const customerHistory = await customerHistoryFor(ctx, ws, conversationId, c.customer_address, (orderLink as { status: string; snapshot: OrderRecord | null } | null));
   // Amazon's copies of what we wrote (also from Seller Central) show as our answer, with only our text.
-  for (const m of related as Array<{ own_copy: boolean; body_text: string; direction: string; kind: string }>) {
+  for (const m of related as Array<{ own_copy: boolean; system_notice: boolean; body_text: string; direction: string; kind: string }>) {
+    if (m.system_notice) m.kind = "system_notice";
     if (!m.own_copy) continue;
     m.body_text = ownCopyText(m.body_text);
     m.direction = "outbound";
