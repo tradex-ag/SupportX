@@ -38,7 +38,7 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
   const [data, setData] = useState<SettingsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [panel, setPanel] = useState<{ card: string; action: StepAction } | null>(null);
+  const [panel, setPanel] = useState<{ card: string; action: StepAction; id?: string } | null>(null);
   const base = `/api/w/${workspaceId}`;
   const owner = role === "owner";
 
@@ -84,6 +84,8 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
       base={base}
       act={act}
       checkResult={checkResult}
+      credentialsOpen={panel?.action === "credentials" && panel.id === c.id}
+      onCredentials={(open) => setPanel(open ? { card: "connection", action: "credentials", id: c.id } : null)}
     />
   );
 
@@ -122,6 +124,7 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
         const onAction = (a: StepAction) => {
           if (a === "check" && kind) return checkFirst(kind);
           if (a === "confirm" || a === "unconfirm") return void act(() => api("POST", `${base}/setup-confirmations`, { platform: m, done: a === "confirm" }), () => a === "confirm" ? "Abgehakt." : "Haken entfernt.");
+          if (a === "credentials") return setPanel({ card: m, action: a, id: (own.find((c) => c.health === "error") ?? own[0])?.id });
           if (a === "ebay_login" && own[0]) return void act(async () => { const r = await api<{ url: string }>("POST", `${base}/connections/${own[0]!.id}/ebay/authorize`); window.location.assign(r.url); });
           setPanel({ card: m, action: a });
         };
@@ -229,7 +232,7 @@ function SetupCard({ setup, owner, onAction, graphMailbox, onSending, serverSend
   const doneCount = setup.steps.filter((s) => s.done).length;
   const countable = setup.steps.length;
   const pill = setup.error ? { cls: "pill bad", label: "Fehler" } : setup.connected ? { cls: "pill ok", label: "Angebunden" } : doneCount === 0 ? { cls: "pill muted", label: "Nicht eingerichtet" } : { cls: "pill warn", label: `${doneCount} von ${countable} erledigt` };
-  const ACTION_LABEL: Record<StepAction, string> = { connect: "Jetzt eintragen", ebay_login: "Bei eBay anmelden", check: "Verbindung testen", rule: "Regel anlegen", route: "Antwortweg vermerken", erp: "Jetzt eintragen", confirm: "Erledigt, abhaken", unconfirm: "Haken entfernen" };
+  const ACTION_LABEL: Record<StepAction, string> = { connect: "Jetzt eintragen", credentials: "Zugangsdaten ändern", ebay_login: "Bei eBay anmelden", check: "Verbindung testen", rule: "Regel anlegen", route: "Antwortweg vermerken", erp: "Jetzt eintragen", confirm: "Erledigt, abhaken", unconfirm: "Haken entfernen" };
   return (
     <section className={`card setup${setup.connected && !setup.error ? " connected" : ""}`} aria-label={setup.label}>
       <div className="setup-head">
@@ -287,9 +290,10 @@ function explainError(raw: string): string {
   return raw;
 }
 
-function ConnectionCard({ c, owner, duplicate, base, act, checkResult }: {
+function ConnectionCard({ c, owner, duplicate, base, act, checkResult, credentialsOpen, onCredentials }: {
   c: Connection; owner: boolean; duplicate: boolean; base: string;
   act: (fn: () => Promise<unknown>, success?: (result: unknown) => string) => Promise<void>; checkResult: (r: unknown) => string;
+  credentialsOpen: boolean; onCredentials: (open: boolean) => void;
 }) {
   const [secretOpen, setSecretOpen] = useState(false);
   const status = c.paused ? { label: "Pausiert", cls: "pill warn" } : c.health === "ok" ? { label: "Verbunden", cls: "pill ok" } : c.health === "error" ? { label: "Fehler", cls: "pill bad" } : { label: "Noch nicht geprüft", cls: "pill muted" };
@@ -321,10 +325,17 @@ function ConnectionCard({ c, owner, duplicate, base, act, checkResult }: {
       {owner && (
         <div className="row wrap">
           {graph && <button onClick={() => setSecretOpen(!secretOpen)}>Schlüssel austauschen</button>}
+          {!graph && !credentialsOpen && <button className={c.health === "error" && !c.paused ? "primary" : ""} onClick={() => onCredentials(true)}>Zugangsdaten ändern</button>}
           {c.kind === "ebay_messages" && c.config.sellerUsername && <button onClick={ebayLogin}>Bei eBay neu anmelden</button>}
           <button onClick={() => act(() => api("POST", `${base}/connections/${c.id}/paused`, { paused: !c.paused }))}>{c.paused ? "Fortsetzen" : "Pausieren"}</button>
           <button className="danger" onClick={remove}>Löschen</button>
         </div>
+      )}
+      {credentialsOpen && owner && !graph && (
+        <CredentialsForm kind={c.kind} onCancel={() => onCredentials(false)} onSubmit={(body) => {
+          onCredentials(false);
+          void act(() => api("POST", `${base}/connections/${c.id}/credentials`, body), (r) => (r as { needsEbayLogin?: boolean }).needsEbayLogin ? "Zugangsdaten gespeichert. Jetzt „Bei eBay anmelden“ klicken." : "Zugangsdaten gespeichert. Bitte einmal „Verbindung testen“.");
+        }} />
       )}
       {secretOpen && owner && <SecretForm onSubmit={(clientSecret) => { setSecretOpen(false); void act(() => api("POST", `${base}/connections/${c.id}/secret`, { clientSecret }), () => "Schlüssel ausgetauscht. Bitte einmal „Verbindung testen“."); }} />}
     </div>
@@ -500,6 +511,34 @@ function KauflandForm({ onSubmit, onCancel }: { onSubmit: (body: unknown) => voi
       <HiddenField label="Secret Key" value={form.secretKey} onChange={(v) => setForm({ ...form, secretKey: v })} />
       <label>Storefronts (leer = alle, z. B. de)<input value={form.storefronts} onChange={set("storefronts")} /></label>
       <div className="row"><button type="submit" className="primary">Verbinden</button><button type="button" onClick={onCancel}>Abbrechen</button></div>
+    </form>
+  );
+}
+
+/** New keys for an existing marketplace connection. Stored values are never shown; empty optional fields keep them. */
+function CredentialsForm({ kind, onSubmit, onCancel }: { kind: ChannelKind; onSubmit: (body: Record<string, string>) => void; onCancel: () => void }) {
+  const [form, setForm] = useState<Record<string, string>>({});
+  const set = (key: string) => (v: string) => setForm({ ...form, [key]: v });
+  const text = (label: string, key: string) => <label>{label}<input value={form[key] ?? ""} onChange={(e) => set(key)(e.target.value)} autoComplete="off" spellCheck={false} /></label>;
+  return (
+    <form className="stack inset" onSubmit={(e) => { e.preventDefault(); onSubmit(Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v))); }}>
+      <h4>Zugangsdaten ändern</h4>
+      {kind === "kaufland_tickets" && <>
+        <p className="muted small">Die Schlüssel stehen im Kaufland Seller Portal unter Einstellungen → API. Die gespeicherten Schlüssel werden ersetzt, Fälle und Einstellungen bleiben erhalten.</p>
+        <HiddenField label="Client Key" value={form.clientKey ?? ""} onChange={set("clientKey")} />
+        <HiddenField label="Secret Key" value={form.secretKey ?? ""} onChange={set("secretKey")} />
+      </>}
+      {kind === "mirakl_inbox" && <>
+        <p className="muted small">Der API-Schlüssel steht im Mirakl-Backoffice oben rechts unter dem Benutzer → API-Schlüssel. Fälle und Einstellungen bleiben erhalten.</p>
+        <HiddenField label="API-Schlüssel" value={form.apiKey ?? ""} onChange={set("apiKey")} />
+      </>}
+      {kind === "ebay_messages" && <>
+        <p className="muted small">Aus dem eBay Developer Program unter „Application Keys“ (Production). Leere Felder behalten den gespeicherten Wert. Mit einer neuen App ID muss sich das Verkäuferkonto danach neu bei eBay anmelden.</p>
+        {text("App ID (Client ID, leer = unverändert)", "clientId")}
+        <HiddenField label="Cert ID (Client Secret)" value={form.clientSecret ?? ""} onChange={set("clientSecret")} />
+        {text("RuName (leer = unverändert)", "ruName")}
+      </>}
+      <div className="row"><button type="submit" className="primary">Speichern</button><button type="button" onClick={onCancel}>Abbrechen</button></div>
     </form>
   );
 }

@@ -24,7 +24,7 @@ import {
   createMiraklConnection,
   deleteRoutingRule,
   revokeReplyRoute,
-  setConnectionPaused, replaceConnectionSecret, deleteConnection,
+  setConnectionPaused, replaceConnectionSecret, replaceMarketplaceCredentials, deleteConnection,
   setMiraklBackgroundSync,
   setPlatformSending,
   setSendEnabled,
@@ -552,6 +552,13 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.post("/api/w/:ws/connections/:id/secret", async (req) => {
     await replaceConnectionSecret(ctx, await actor(req), (req.params as { id: string }).id, parse(z.object({ clientSecret: z.string().max(500) }), req.body).clientSecret);
     return { ok: true };
+  });
+  app.post("/api/w/:ws/connections/:id/credentials", async (req) => {
+    const body = parse(
+      z.object({ clientKey: z.string().max(200).optional(), secretKey: z.string().max(200).optional(), apiKey: z.string().max(500).optional(), clientId: z.string().max(200).optional(), clientSecret: z.string().max(500).optional(), ruName: z.string().max(200).optional() }),
+      req.body,
+    );
+    return await replaceMarketplaceCredentials(ctx, await actor(req), (req.params as { id: string }).id, body);
   });
   app.delete("/api/w/:ws/connections/:id", async (req) => {
     return await deleteConnection(ctx, await actor(req), (req.params as { id: string }).id);

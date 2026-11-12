@@ -614,12 +614,70 @@ export async function replaceConnectionSecret(ctx: AppContext, actor: Actor, con
   const clientSecret = checkedClientSecret(rawSecret);
   await withTx(ctx.db, async (tx) => {
     const row = await loadChannelConnection(tx, actor.workspaceId, connectionId);
-    if (row.kind !== "microsoft_graph") throw new ServiceError(400, "INVALID", "Nur für Microsoft-Postfächer. Marktplatz-Zugänge bitte löschen und neu verbinden.");
+    if (row.kind !== "microsoft_graph") throw new ServiceError(400, "INVALID", "Nur für Microsoft-Postfächer. Marktplatz-Zugänge über „Zugangsdaten ändern“ austauschen.");
     const secretId = await ctx.secrets.store(tx, actor.workspaceId, "microsoft_client_secret", clientSecret);
     const config = { ...row.config, secretHint: { prefix: clientSecret.slice(0, 3), length: clientSecret.length } };
     await tx.query("UPDATE channel_connections SET secret_id = $3, config = $4, health = 'unknown', last_error = NULL, last_error_at = NULL WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, connectionId, secretId, JSON.stringify(config)]);
     if (row.secret_id) await tx.query("DELETE FROM secrets WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, row.secret_id]);
     await audit(tx, actor, "connection.secret_replaced", "channel_connection", connectionId);
+  });
+}
+
+/**
+ * Replaces the stored keys of a marketplace connection (Kaufland, Shop Apotheke, eBay), e.g. after
+ * the marketplace rejected them or the merchant created new ones. Cases, rules and settings stay.
+ * The browser never receives the old values; empty optional fields keep what is stored.
+ */
+export async function replaceMarketplaceCredentials(
+  ctx: AppContext,
+  actor: Actor,
+  connectionId: string,
+  input: { clientKey?: string; secretKey?: string; apiKey?: string; clientId?: string; clientSecret?: string; ruName?: string },
+): Promise<{ needsEbayLogin: boolean }> {
+  requireRole(actor, ["owner"]);
+  const t = (v: string | undefined) => v?.trim() ?? "";
+  return withTx(ctx.db, async (tx) => {
+    const row = await loadChannelConnection(tx, actor.workspaceId, connectionId);
+    let config: Record<string, unknown> = { ...row.config };
+    let secret: string;
+    let purpose: string;
+    let needsEbayLogin = false;
+    switch (row.kind) {
+      case "kaufland_tickets":
+        required({ clientKey: input.clientKey, secretKey: input.secretKey });
+        secret = JSON.stringify({ clientKey: t(input.clientKey), secretKey: t(input.secretKey) } satisfies KauflandSecret);
+        purpose = "kaufland_api_keys";
+        break;
+      case "mirakl_inbox":
+        required({ apiKey: input.apiKey });
+        secret = t(input.apiKey);
+        purpose = "mirakl_api_key";
+        break;
+      case "ebay_messages": {
+        required({ clientSecret: input.clientSecret });
+        const old = row.secret_id ? parseSecret<EbaySecret>(await ctx.secrets.read(tx, actor.workspaceId, row.secret_id), "eBay") : null;
+        const clientId = t(input.clientId) || (config.clientId as string);
+        const appChanged = clientId !== config.clientId;
+        config = { ...config, clientId, ruName: t(input.ruName) || config.ruName };
+        // A refresh token belongs to one eBay app: with a new App ID the seller has to log in again.
+        const keep: Omit<EbaySecret, "clientSecret"> = !appChanged && old?.refreshToken ? { refreshToken: old.refreshToken, refreshTokenExpiresAt: old.refreshTokenExpiresAt } : {};
+        if (!keep.refreshToken) {
+          needsEbayLogin = true;
+          for (const k of ["sellerUsername", "grantedScopes", "oauthStateHash", "oauthStateUserId", "oauthStateExpiresAt"]) delete config[k];
+        }
+        secret = JSON.stringify({ clientSecret: t(input.clientSecret), ...keep } satisfies EbaySecret);
+        purpose = "ebay_oauth";
+        break;
+      }
+      default:
+        throw new ServiceError(400, "INVALID", "Für Microsoft-Postfächer bitte „Schlüssel austauschen“ nutzen.");
+    }
+    validateOffline(ctx, row.kind, config, secret);
+    const secretId = await ctx.secrets.store(tx, actor.workspaceId, purpose, secret);
+    await tx.query("UPDATE channel_connections SET secret_id = $3, config = $4, health = 'unknown', last_error = NULL, last_error_at = NULL WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, connectionId, secretId, JSON.stringify(config)]);
+    if (row.secret_id) await tx.query("DELETE FROM secrets WHERE workspace_id = $1 AND id = $2", [actor.workspaceId, row.secret_id]);
+    await audit(tx, actor, "connection.credentials_replaced", "channel_connection", connectionId, { kind: row.kind, needsEbayLogin });
+    return { needsEbayLogin };
   });
 }
 

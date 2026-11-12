@@ -84,3 +84,14 @@ test("sending: offered once connected, on only with the platform's route and sen
   assert.deepEqual(marketSetup("amazon", { ...empty, connections: [g], routes, confirmations: ticked }).sending, { connectionId: "g1", on: true });
   assert.equal(marketSetup("docmorris", { ...empty, connections: [g], routes, confirmations: { docmorris: ticked.amazon } }).sending!.on, false, "the Amazon route does not open DocMorris");
 });
+
+test("API market with refused keys: the next step is to enter new keys, not to test again", () => {
+  const refused = marketSetup("kaufland", { ...empty, connections: [conn("k1", "kaufland_tickets", { health: "error", last_error: "Zugang abgelehnt (401): Zugangsdaten ungültig oder abgelaufen. – shop-client-key not known." })] });
+  assert.equal(refused.next?.key, "connect");
+  assert.equal(refused.next?.action, "credentials");
+  assert.equal(refused.next?.title, "Zugangsdaten erneuern");
+  const outage = marketSetup("shop_apotheke", { ...empty, connections: [conn("m1", "mirakl_inbox", { health: "error", last_error: "HTTP 503" })] });
+  assert.equal(outage.next?.key, "check", "an outage is not a key problem");
+  const paused = marketSetup("ebay", { ...empty, connections: [conn("e1", "ebay_messages", { health: "error", paused: true, last_error: "Zugang abgelehnt (401)", config: { sellerUsername: "x" } })] });
+  assert.notEqual(paused.next?.action, "credentials");
+});
