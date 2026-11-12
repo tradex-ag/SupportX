@@ -47,7 +47,45 @@ function describeStatus(status: number): string {
   if (status === 404) return "Ressource nicht gefunden (404).";
   if (status === 410) return "Ressource nicht mehr verfügbar (410).";
   if (status === 429) return "Ratenlimit erreicht (429).";
+  if (status >= 500) return `Serverfehler beim Anbieter (HTTP ${status}), meist vorübergehend.`;
   return `HTTP ${status}`;
+}
+
+/**
+ * Human-readable detail from a provider error body. Keeps the provider's error
+ * code (e.g. Graph `ErrorInternalServerError`), its message, field errors and a
+ * request id so a failure can be traced with the provider's support.
+ */
+export function describeErrorBody(text: string, headers?: Headers): string {
+  let code = "";
+  let message = "";
+  let requestId = "";
+  try {
+    const parsed = JSON.parse(text) as {
+      error?: { message?: string; code?: string; innerError?: { code?: string; "request-id"?: string; date?: string }; innererror?: { code?: string; "request-id"?: string } } | string;
+      message?: string;
+      errors?: unknown;
+    };
+    if (typeof parsed.error === "string") message = parsed.error;
+    else if (parsed.error) {
+      code = parsed.error.code ?? "";
+      message = parsed.error.message ?? "";
+      const inner = parsed.error.innerError ?? parsed.error.innererror;
+      if (inner?.code && inner.code !== code) code = code ? `${code}/${inner.code}` : inner.code;
+      requestId = inner?.["request-id"] ?? "";
+    }
+    if (!message && typeof parsed.message === "string") message = parsed.message;
+    // Validation errors often list the offending fields separately (e.g. Kaufland: errors[]).
+    const fields = Array.isArray(parsed.errors)
+      ? parsed.errors.map((e) => (typeof e === "string" ? e : [e?.property ?? e?.field ?? e?.path, e?.message].filter((v) => typeof v === "string" && v).join(": "))).filter(Boolean).slice(0, 3)
+      : [];
+    if (fields.length) message = [message, fields.join("; ")].filter(Boolean).join(": ");
+  } catch {
+    message = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+  }
+  if (!requestId) requestId = headers?.get("request-id") ?? headers?.get("x-ms-request-id") ?? "";
+  const main = [code, message].filter(Boolean).join(": ");
+  return [main, requestId ? `Anfrage-ID ${requestId}` : ""].filter(Boolean).join(" · ");
 }
 
 /** JSON request with timeout and a classification of failures for retry decisions. */
@@ -71,18 +109,7 @@ export async function requestJson(url: URL | string, options: RequestOptions): P
   }
   const text = await response.text();
   if (!response.ok) {
-    let detail = "";
-    try {
-      const parsed = JSON.parse(text) as { error?: { message?: string; code?: string } | string; message?: string; errors?: unknown };
-      detail = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message ?? "";
-      // Validation errors often list the offending fields separately (e.g. Kaufland: errors[]).
-      const fields = Array.isArray(parsed.errors)
-        ? parsed.errors.map((e) => (typeof e === "string" ? e : [e?.property ?? e?.field ?? e?.path, e?.message].filter((v) => typeof v === "string" && v).join(": "))).filter(Boolean).slice(0, 3)
-        : [];
-      if (fields.length) detail = [detail, fields.join("; ")].filter(Boolean).join(": ");
-    } catch {
-      detail = text.slice(0, 200);
-    }
+    const detail = describeErrorBody(text, response.headers);
     const retryable = response.status === 429 || response.status >= 500;
     // A 5xx after a POST may still have been executed by the provider.
     const uncertain = options.method !== "GET" && response.status >= 500;
