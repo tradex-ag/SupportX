@@ -114,7 +114,9 @@ Alle drei kommen per Schnittstelle, nicht per Mail. Mails der Marktplätze sind 
 **eBay**
 1. Im eBay Developer Program ein Production-Keyset anlegen (App ID, Cert ID) und einen RuName. Als *Auth accepted URL* des RuName eintragen: `https://<ihre-domain>/oauth/ebay/callback` (`PUBLIC_BASE_URL`).
    eBay schaltet ein Production-Keyset erst frei, wenn Kontolöschungen empfangen werden: In `.env` einen eigenen Zufallswert `EBAY_DELETION_VERIFICATION_TOKEN=` (32–80 Zeichen, nur Buchstaben, Ziffern, `_` und `-`, z. B. `openssl rand -hex 24`) setzen und SupportX neu starten. Im Developer Portal unter *Alerts & Notifications → Marketplace Account Deletion* als Endpunkt `https://<ihre-domain>/webhooks/ebay/account-deletion` und denselben Token eintragen, dann *Send Test Notification*. SupportX löscht bei einer echten Meldung alle Fälle dieses eBay-Nutzers; im Protokoll bleibt nur ein Hash.
-2. *Einstellungen → eBay verbinden …*, App ID, Cert ID und RuName eintragen.
+2. Zwei Wege:
+   - **Ein Keyset für alle Händler (empfohlen):** App ID, Cert ID und RuName einmal in `.env` setzen (`EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_RU_NAME`, alle drei zusammen) und SupportX neu starten. Die Werte bleiben auf dem Server, werden nie angezeigt und nicht in Arbeitsbereiche kopiert. Der Händler sieht in der eBay-Karte nur *Bei eBay anmelden*. Ein RuName hat genau eine *Auth accepted URL*: Wird das Keyset schon von einer anderen Anwendung genutzt, im selben Keyset einen **zusätzlichen** RuName für SupportX anlegen.
+   - **Eigenes Keyset je Händler:** ohne diese drei Werte trägt der Inhaber unter *Einstellungen → eBay* App ID, Cert ID und RuName ein.
 3. *Bei eBay anmelden* und mit dem **Verkäuferkonto** zustimmen (Recht „commerce.message“). Danach ruft SupportX Mitglieder-Nachrichten alle 5 Minuten ab.
 
 **Shop Apotheke (Mirakl)**

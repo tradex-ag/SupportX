@@ -84,3 +84,13 @@ test("sending: offered once connected, on only with the platform's route and sen
   assert.deepEqual(marketSetup("amazon", { ...empty, connections: [g], routes, confirmations: ticked }).sending, { connectionId: "g1", on: true });
   assert.equal(marketSetup("docmorris", { ...empty, connections: [g], routes, confirmations: { docmorris: ticked.amazon } }).sending!.on, false, "the Amazon route does not open DocMorris");
 });
+
+test("eBay with the installation's keyset: no keys to enter, the login is the first step and works without a connection", () => {
+  const fresh = marketSetup("ebay", { ...empty, ebayOperatorApp: true });
+  assert.deepEqual(fresh.steps.map((st) => st.key), ["ebay_login", "check"]);
+  assert.equal(fresh.next?.action, "ebay_login");
+  assert.equal(fresh.steps[1]!.action, undefined, "nothing to test before the login");
+  const loggedIn = marketSetup("ebay", { ...empty, ebayOperatorApp: true, connections: [conn("e1", "ebay_messages", { config: { sellerUsername: "shop" } })] });
+  assert.equal(loggedIn.connected, true);
+  assert.equal(loggedIn.next, null);
+});

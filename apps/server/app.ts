@@ -487,7 +487,8 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.post("/api/w/:ws/connections/ebay", async (req) => {
     const body = parse(
       z.object({
-        displayName: z.string().max(120).default("eBay"), clientId: z.string().max(200), clientSecret: z.string().max(500), ruName: z.string().max(200), sandbox: z.boolean().optional(),
+        // Keys are optional: without them the installation's eBay keyset is used (EBAY_CLIENT_ID …).
+        displayName: z.string().max(120).default("eBay"), clientId: z.string().max(200).optional(), clientSecret: z.string().max(500).optional(), ruName: z.string().max(200).optional(), sandbox: z.boolean().optional(),
         defaultMerchantAccountId: accountField, initialSyncDays: z.number().int().min(1).max(90).optional(),
         authBaseUrl: z.string().optional(), apiBaseUrl: z.string().optional(), identityBaseUrl: z.string().optional(),
       }),

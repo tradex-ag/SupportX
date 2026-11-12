@@ -4,18 +4,29 @@ import { many, withTx } from "../storage/db.ts";
 import { audit } from "./audit.ts";
 import { ebayApp, parseSecret, type ChannelConnectionRow, type EbaySecret } from "./connections.ts";
 import type { AppContext } from "./context.ts";
+import { operatorEbayApp } from "../storage/config.ts";
 
 const keyCache = new Map<string, { key: EbayPublicKey; until: number }>();
 
 async function publicKey(ctx: AppContext, kid: string, fetchImpl?: typeof fetch): Promise<EbayPublicKey | null> {
   const cached = keyCache.get(kid);
   if (cached && cached.until > Date.now()) return cached.key;
-  // Any eBay keyset of this installation may fetch the key; production first.
-  const rows = await many<ChannelConnectionRow>(ctx.db, "SELECT * FROM channel_connections WHERE kind = 'ebay_messages' AND secret_id IS NOT NULL ORDER BY (config->>'sandbox')::boolean IS TRUE, created_at");
+  // Any eBay keyset of this installation may fetch the key: the operator's first, then production before sandbox.
+  const operator = operatorEbayApp(ctx.config);
+  if (operator) {
+    try {
+      const key = await fetchEbayPublicKey({ ...operator, fetchImpl }, kid);
+      keyCache.set(kid, { key, until: Date.now() + 60 * 60_000 });
+      return key;
+    } catch {
+      // fall back to the merchants' own keysets
+    }
+  }
+  const rows = await many<ChannelConnectionRow>(ctx.db, "SELECT * FROM channel_connections WHERE kind = 'ebay_messages' AND secret_id IS NOT NULL AND config->>'operatorApp' IS NULL ORDER BY (config->>'sandbox')::boolean IS TRUE, created_at");
   for (const row of rows) {
     try {
       const secret = parseSecret<EbaySecret>(await ctx.secrets.read(ctx.db, row.workspace_id, row.secret_id!), "eBay");
-      const key = await fetchEbayPublicKey({ ...ebayApp(row, secret.clientSecret), fetchImpl }, kid);
+      const key = await fetchEbayPublicKey({ ...ebayApp(row, secret, null), fetchImpl }, kid);
       keyCache.set(kid, { key, until: Date.now() + 60 * 60_000 });
       return key;
     } catch {
