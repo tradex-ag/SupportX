@@ -47,6 +47,7 @@ import { writeDesignMd, type WorkspaceTheme } from "../../packages/core/design-m
 import { checkAmazonListingConnection, closeAmazonOffer, deleteAmazonListingConnection, getAmazonListingSettings, lookupAmazonListing, saveAmazonListingConnection } from "../../packages/services/amazon-listings.ts";
 import { batchCandidates, sendMany } from "../../packages/services/batch.ts";
 import { supportReport } from "../../packages/services/reports.ts";
+import { addToRefundList, listRefunds, removeFromRefundList, setRefundDetails, setRefundDone } from "../../packages/services/refunds.ts";
 import { evidencePdf } from "../../packages/services/evidence.ts";
 import { composeDraft, discardDraft, editDraft, polishDraft, renderSnippet, requestRedraft, resolveUncertainSend, sendDraft, snippetDraft } from "../../packages/services/replies.ts";
 
@@ -368,6 +369,30 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
   app.get("/api/w/:ws/report", async (req) => {
     const q = parse(z.object({ days: z.coerce.number().int().default(30) }), req.query);
     return await supportReport(ctx, await actor(req), q.days);
+  });
+  // --- Refund list ----------------------------------------------------------
+  app.get("/api/w/:ws/refunds", async (req) => {
+    const q = parse(z.object({ filter: z.enum(["open", "done", "all"]).default("open") }), req.query);
+    return listRefunds(ctx, await actor(req), q.filter);
+  });
+  const refundIds = z.array(z.string().max(40)).min(1).max(50);
+  app.post("/api/w/:ws/refunds/done", async (req) => {
+    const body = parse(z.object({ conversationIds: refundIds, done: z.boolean(), creditNoteNumber: z.string().max(100).nullable().optional() }), req.body);
+    await setRefundDone(ctx, await actor(req), body);
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/refunds/details", async (req) => {
+    const body = parse(z.object({ conversationIds: refundIds, amount: z.string().max(30).nullable().optional(), note: z.string().max(1000).nullable().optional(), creditNoteNumber: z.string().max(100).nullable().optional() }), req.body);
+    await setRefundDetails(ctx, await actor(req), body);
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/refunds/remove", async (req) => {
+    await removeFromRefundList(ctx, await actor(req), parse(z.object({ conversationIds: refundIds }), req.body).conversationIds);
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/cases/:id/refund-list", async (req) => {
+    await addToRefundList(ctx, await actor(req), (req.params as { id: string }).id);
+    return { ok: true };
   });
   app.post("/api/w/:ws/batch/candidates", async (req) => {
     const body = parse(z.object({ conversationIds: z.array(z.string()).max(50) }), req.body);

@@ -357,6 +357,9 @@ export async function mergeSplitFollowUps(db: Db): Promise<number> {
       await tx.query("UPDATE internal_notes SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
       await tx.query("UPDATE message_forwards SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
       await tx.query("UPDATE conversation_threads SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source, p.target]);
+      // Refund list: keep what a person entered; the target's own entry wins.
+      await tx.query("UPDATE refund_entries SET conversation_id = $3 WHERE workspace_id = $1 AND conversation_id = $2 AND NOT EXISTS (SELECT 1 FROM refund_entries t WHERE t.workspace_id = $1 AND t.conversation_id = $3)", [ws, p.source, p.target]);
+      await tx.query("DELETE FROM refund_entries WHERE workspace_id = $1 AND conversation_id = $2", [ws, p.source]);
       const conn = (await one<{ connection_id: string }>(tx, "SELECT connection_id FROM conversations WHERE workspace_id = $1 AND id = $2", [ws, p.source]))!;
       await tx.query("DELETE FROM conversations WHERE workspace_id = $1 AND id = $2", [ws, p.source]);
       await tx.query("INSERT INTO conversation_threads (workspace_id, connection_id, external_thread_key, conversation_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING", [ws, conn.connection_id, source.external_thread_key, p.target]);

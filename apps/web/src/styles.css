@@ -314,3 +314,36 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1
 a.button.refund-due { background: var(--signal); border-color: var(--signal); color: #fff; box-shadow: 0 0 0 3px var(--bad-bg); }
 a.button.refund-due:hover { background: var(--bad); border-color: var(--bad); }
 .refund-flag { font-family: var(--mono); font-size: 11px; padding: 0 6px; background: var(--signal); color: #fff; border-radius: var(--radius); white-space: nowrap; }
+/* Erstattungen: one row per order, tick on the left; red only for the open count. */
+.mono { font-family: var(--mono); }
+.refunds .settings-title { justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.refunds-intro { margin: 0; max-width: 760px; }
+.refund-list { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
+.refund-row { display: grid; grid-template-columns: 32px minmax(150px, 1.1fr) minmax(200px, 2fr) 140px minmax(160px, 1fr) minmax(180px, 1.3fr); gap: 16px; align-items: start; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.refund-row:last-child { border-bottom: none; }
+.refund-row.done { background: var(--bg); }
+.refund-row.done .refund-number, .refund-row.done .refund-items { color: var(--muted); }
+.refund-tick { margin: 0; padding-top: 2px; cursor: pointer; }
+.refund-tick input { width: 20px; height: 20px; min-height: 0; margin: 0; accent-color: var(--text); cursor: pointer; }
+.refund-number { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+.refund-kind { font-weight: 600; margin-bottom: 2px; }
+.refund-items ul { margin: 0 0 2px; padding: 0; list-style: none; }
+.refund-items, .refund-cases { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.refund-cases button.link { justify-content: flex-start; text-align: left; white-space: normal; min-height: 24px; padding: 0; }
+.refund-cases button.muted-link { color: var(--muted); text-decoration-color: var(--line); }
+.refund-amount input, .refund-state input { width: 100%; min-height: 32px; }
+.refund-amount input { font-family: var(--mono); text-align: right; }
+.refund-sum { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; padding-top: 2px; }
+.refund-state { display: flex; flex-direction: column; gap: 4px; }
+.tab .count { margin-left: 6px; font-family: var(--mono); font-size: 11px; padding: 0 5px; background: var(--signal); color: #fff; border-radius: var(--radius); }
+.refund-list-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+@media (max-width: 1000px) {
+  .refund-row { grid-template-columns: 32px 1fr 1fr; }
+  .refund-items, .refund-cases { grid-column: 2 / -1; }
+}
+@media (max-width: 560px) {
+  .refund-row { grid-template-columns: 28px 1fr; gap: 10px; }
+  .refund-row > :not(.refund-tick) { grid-column: 2; }
+}
+/* Four menu points: let the menu wrap on a phone instead of scrolling sideways. */
+.topbar nav { flex-wrap: wrap; min-width: 0; }

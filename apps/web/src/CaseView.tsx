@@ -72,6 +72,8 @@ interface CaseData {
   amazonListings?: { marketplaceIds: string[] } | null;
   /** Goods back in weclapp and no refund recorded yet: the refund is to be done. */
   refund?: RefundDue;
+  /** Where the case stands on the refund list ("Erstattungen"). */
+  refundList?: { state: "none" | "open" | "done"; removed: boolean; item: { done: { at: string; by: string | null; creditNoteNumber: string | null } | null } | null };
 }
 
 /** Readable names for the Protokoll; unknown actions show their technical name. */
@@ -344,7 +346,8 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               onDone={() => { void load(); onChanged(); }}
             />
           )}
-          <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note }), "Gespeichert.")} />
+          <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note }), "Gespeichert.")}
+            onAddToRefunds={() => act(() => api("POST", `${base}/cases/${caseId}/refund-list`), "Steht jetzt auf der Erstattungsliste.")} />
           <CustomerHistory history={data.customerHistory} onOpen={onOpenCase} />
           {canEdit && (
             <section className="card">
@@ -679,7 +682,7 @@ export const OUTCOME_LABEL: Record<string, string> = {
 };
 
 /** What was answered and what was done afterwards: the base for later automation. */
-function Outcome({ data, canEdit, onSave }: { data: CaseData; canEdit: boolean; onSave: (outcome: string | null, note: string) => void }) {
+function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; canEdit: boolean; onSave: (outcome: string | null, note: string) => void; onAddToRefunds: () => void }) {
   const c = data.conversation;
   const [note, setNote] = useState(c.outcome_note ?? "");
   const sent = data.outbox.find((o) => o.state === "provider_accepted" || o.state === "confirmed");
@@ -700,7 +703,28 @@ function Outcome({ data, canEdit, onSave }: { data: CaseData; canEdit: boolean; 
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
       )}
       {c.outcome_at && <p className="muted small">Erfasst {fmtDate(c.outcome_at)}</p>}
+      <RefundListStatus status={data.refundList} canEdit={canEdit} onAdd={onAddToRefunds} />
     </section>
+  );
+}
+
+/** The case on the refund list: open, done in weclapp, or a button to put it there. */
+function RefundListStatus({ status, canEdit, onAdd }: { status: CaseData["refundList"]; canEdit: boolean; onAdd: () => void }) {
+  if (!status) return null;
+  const done = status.item?.done;
+  return (
+    <div className="refund-list-status small">
+      {status.state === "open" && <span className="refund-flag">Erstattungsliste</span>}
+      {status.state === "open" && <span>Steht auf der Erstattungsliste, in weclapp noch nicht abgehakt.</span>}
+      {status.state === "done" && done && (
+        <span className="ok-text">Erstattung in weclapp erledigt {fmtDate(done.at)}{done.by ? ` von ${done.by}` : ""}{done.creditNoteNumber ? ` (Gutschrift ${done.creditNoteNumber})` : ""}.</span>
+      )}
+      {status.state === "none" && canEdit && (
+        <button className="small" onClick={onAdd} title="Für Erstattungen, die in weclapp noch zu machen sind. Bei „Erstattet“ oder „Teilweise erstattet“ geschieht das von selbst.">
+          {status.removed ? "Wieder auf die Erstattungsliste" : "Auf die Erstattungsliste"}
+        </button>
+      )}
+    </div>
   );
 }
 

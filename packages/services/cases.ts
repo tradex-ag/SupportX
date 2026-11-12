@@ -18,6 +18,7 @@ import { deadlineState, MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/d
 import { TOPICS } from "../core/topic.ts";
 import { refundDue, type RefundDue, type RelatedRefundCase } from "../core/refund-due.ts";
 import { returnSummary, type ReturnOrderInput } from "../core/returns.ts";
+import { caseRefundStatus } from "./refunds.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
 
@@ -217,8 +218,9 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const invoices = invoiceSummary(link?.status === "unique" ? link.snapshot : null);
   const forwards = await caseForwards(ctx, ws, conversationId);
   const [listingActions, amazonListings] = await Promise.all([listCaseListingActions(ctx.db, ws, conversationId), caseAmazonListingAccess(ctx.db, ws)]);
+  const refundList = await caseRefundStatus(ctx, ws, conversationId);
   const refund = await refundDueFor(ctx, ws, conversationId, conversation as { outcome: string | null; subject: string | null }, orderLink as { status: string; external_order_id: string | null; snapshot: OrderRecord | null } | null);
-  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund };
+  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund, refundList };
 }
 
 /**
@@ -483,6 +485,10 @@ export async function setOutcome(ctx: AppContext, actor: Actor, conversationId: 
       [actor.workspaceId, conversationId, input.outcome, input.outcome === null ? null : note, input.outcome !== null && actor.type === "user" ? actor.userId : null],
     );
     if (res.rowCount === 0) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
+    // "Erstattet" again after the case was taken off the refund list: it belongs on it.
+    if (input.outcome === "refund" || input.outcome === "partial_refund") {
+      await tx.query("UPDATE refund_entries SET removed_at = NULL, updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND removed_at IS NOT NULL", [actor.workspaceId, conversationId]);
+    }
     await audit(tx, actor, "conversation.outcome", "conversation", conversationId, { outcome: input.outcome });
   });
 }
