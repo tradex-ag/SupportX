@@ -34,7 +34,8 @@ export interface KauflandTicketsConfig {
 
 type Json = Record<string, unknown>;
 const PREFIX = "kaufland:ticket:";
-const PAGE = 100;
+/** Kaufland rejects larger pages with 400 "limit: max 30". */
+const PAGE = 30;
 
 interface TicketInfo {
   idOrders: string[];
@@ -137,7 +138,7 @@ export class KauflandTicketsChannel implements MessageChannel {
     const raws: Json[] = [];
     let offset = 0;
     let complete = false;
-    for (let page = 0; page < (this.#config.maxPagesPerSync ?? 20); page++) {
+    for (let page = 0; page < (this.#config.maxPagesPerSync ?? 60); page++) {
       const res = await this.#call("GET", "/tickets/messages", { ts_created_from_iso: kauflandTime(since), limit: PAGE, offset });
       const data = Array.isArray(res?.data) ? (res!.data as Json[]) : [];
       raws.push(...data);

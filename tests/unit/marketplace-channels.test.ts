@@ -49,6 +49,21 @@ describe("Kaufland tickets channel (contract against test double)", () => {
     assert.ok(fake.requests.every((r) => r.startsWith("GET ")), "sync only reads");
   });
 
+  it("pages with at most 30 messages per request (Kaufland: \"limit: max 30\")", async () => {
+    const many = await startFakeKaufland(KFL);
+    try {
+      many.addTicket({ id_ticket: "T9", id_order: "M1000001", buyer: { firstname: "Viel", lastname: "Schreiber" } });
+      for (let i = 0; i < 65; i++) many.addMessage("T9", "buyer", `Nachricht ${i}`, new Date(Date.now() - (i + 1) * 60_000));
+      const result = await new KauflandTicketsChannel({ ...KFL, baseUrl: many.baseUrl, allowTestEndpoints: true }).sync({});
+      assert.equal(result.messages.length, 65);
+      const pages = many.requests.filter((r) => r.startsWith("GET /v2/tickets/messages") || r.includes("/tickets/messages?"));
+      assert.equal(pages.length, 3);
+      assert.ok(pages.every((r) => Number(new URL(`http://x${r.slice(4)}`).searchParams.get("limit")) <= 30));
+    } finally {
+      await many.close();
+    }
+  });
+
   it("filters by storefront on the ticket", async () => {
     const result = await channel({ storefronts: ["de"] }).sync({});
     assert.ok(result.messages.every((m) => m.externalThreadKey !== "kaufland:ticket:T2"));

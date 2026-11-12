@@ -107,6 +107,8 @@ export async function startFakeKaufland(opts: { clientKey: string; secretKey: st
       const all = messages.filter((m) => new Date(m.ts_created_iso).getTime() >= from);
       const offset = Number(url.searchParams.get("offset") ?? 0);
       const limit = Number(url.searchParams.get("limit") ?? 30);
+      // Same rule as the real API (seen live 2026-11-12).
+      if (limit > 30) return json(res, 400, { message: "Validation Failed", errors: [{ property: "limit", message: "max 30" }] });
       return json(res, 200, { data: all.slice(offset, offset + limit), pagination: { offset, limit, total: all.length } });
     }
     const ticketMatch = /^\/tickets\/([^/]+)$/.exec(path);
