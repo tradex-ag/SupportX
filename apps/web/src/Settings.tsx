@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AmazonListingsCard } from "./AmazonListingsSettings.tsx";
 import { api, fmtDate, PLATFORM_LABEL } from "./api.ts";
 import { DEADLINE_PLATFORMS, DEFAULT_REPLY_DEADLINES, MAX_DEADLINE_HOURS } from "../../../packages/core/deadline.ts";
+import { isStale, sinceLabel } from "../../../packages/core/fetch-freshness.ts";
 import { SNIPPET_PLACEHOLDERS } from "../../../packages/core/snippet-placeholders.ts";
 import { API_MARKETS, MAIL_MARKETS, MARKET_KIND, marketSetup, microsoftSetup, weclappSetup, type ChannelSetup, type StepAction } from "./setup-steps.ts";
 
@@ -287,6 +288,41 @@ function explainError(raw: string): string {
   return raw;
 }
 
+/**
+ * Mirakl documents inbox reads as "synchronous only — at each page that includes
+ * an inbox display". SupportX therefore reads Shop Apotheke while its inbox is
+ * open (at most every 10 minutes) and around the clock only after the operator's
+ * permission is recorded here.
+ */
+function MiraklFetchMode({ c, owner, base, act }: { c: Connection; owner: boolean; base: string; act: (fn: () => Promise<unknown>, success?: (result: unknown) => string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const allowed = !!c.config.backgroundSyncAllowed;
+  const minutes = Math.round((c.config.pollIntervalSec ?? 900) / 60);
+  if (allowed) {
+    return (
+      <div className="notice small">
+        Automatischer Abruf alle {minutes} Min., auch wenn niemand den Posteingang offen hat. Freigabe: {c.config.backgroundSyncEvidence}
+        {owner && <> <button className="link" onClick={() => { if (window.confirm("Automatischen Abruf ausschalten? Dann wird Shop Apotheke nur noch abgerufen, solange der Posteingang offen ist.")) void act(() => api("POST", `${base}/connections/${c.id}/mirakl-background-sync`, { allowed: false }), () => "Automatischer Abruf aus."); }}>Ausschalten</button></>}
+      </div>
+    );
+  }
+  return (
+    <div className="notice small">
+      Shop Apotheke wird abgerufen, solange der Posteingang offen ist (höchstens alle 10 Min.), so wie Mirakl es vorsieht. Rund um die Uhr erst, wenn Shop Apotheke das erlaubt.
+      {owner && !open && <> <button className="link" onClick={() => setOpen(true)}>Freigabe eintragen</button></>}
+      {owner && open && (
+        <form className="stack" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `${base}/connections/${c.id}/mirakl-background-sync`, { allowed: true, evidenceNote: note }), () => `Automatischer Abruf an, alle ${minutes} Min.`).then(() => { setOpen(false); setNote(""); }); }}>
+          <label>Wo hat Shop Apotheke den automatischen Abruf erlaubt?
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="z. B. Mail von Partner-Management vom 14.11., Ticket-Nr. …" />
+          </label>
+          <div className="row"><button className="primary" type="submit" disabled={note.trim().length < 10}>Automatischen Abruf einschalten</button><button type="button" onClick={() => setOpen(false)}>Abbrechen</button></div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function ConnectionCard({ c, owner, duplicate, base, act, checkResult }: {
   c: Connection; owner: boolean; duplicate: boolean; base: string;
   act: (fn: () => Promise<unknown>, success?: (result: unknown) => string) => Promise<void>; checkResult: (r: unknown) => string;
@@ -316,7 +352,8 @@ function ConnectionCard({ c, owner, duplicate, base, act, checkResult }: {
         )}
       </div>
       {duplicate && <p className="notice warn small">Dieses Postfach ist mehrfach verbunden, dadurch kommt jede Mail doppelt an. Behalte eine Verbindung, die anderen löschen.</p>}
-      {c.kind === "mirakl_inbox" && !c.config.backgroundSyncAllowed && <p className="notice small">Shop Apotheke liest SupportX nur, wenn du „Jetzt abrufen“ klickst. So verlangt es Mirakl, bis Shop Apotheke einen automatischen Abruf erlaubt.</p>}
+      {!c.paused && isStale(c.last_sync_at) && (c.kind !== "ebay_messages" || c.config.sellerUsername) && <p className="notice warn small">{c.last_sync_at ? `Seit ${sinceLabel(c.last_sync_at).replace(/^vor /, "")} nicht abgerufen.` : "Noch nie abgerufen."} Neue Nachrichten fehlen womöglich im Posteingang. „Jetzt abrufen“ holt sie.</p>}
+      {c.kind === "mirakl_inbox" && <MiraklFetchMode c={c} owner={owner} base={base} act={act} />}
       {c.last_error && !c.paused && <p className="notice bad small">{explainError(c.last_error)}</p>}
       {owner && (
         <div className="row wrap">
@@ -510,7 +547,7 @@ function MiraklForm({ onSubmit, onCancel }: { onSubmit: (body: unknown) => void;
   return (
     <form className="stack inset" onSubmit={(e) => { e.preventDefault(); onSubmit({ ...form, apiKey: form.apiKey.trim(), shopId: form.shopId.trim() || undefined });  }}>
       <h4>Shop Apotheke verbinden</h4>
-      <p className="muted small">Shop Apotheke läuft auf Mirakl. Adresse und API-Schlüssel stehen im Mirakl-Backoffice oben rechts unter dem Benutzer → API-Schlüssel. Gelesen wird zunächst nur per Klick auf „Jetzt abrufen“.</p>
+      <p className="muted small">Shop Apotheke läuft auf Mirakl. Adresse und API-Schlüssel stehen im Mirakl-Backoffice oben rechts unter dem Benutzer → API-Schlüssel. Gelesen wird, solange der Posteingang offen ist, und per Klick auf „Jetzt abrufen“.</p>
       <label>Name<input value={form.displayName} onChange={set("displayName")} required /></label>
       <label>Adresse der Instanz<input placeholder="https://….mirakl.net" value={form.baseUrl} onChange={set("baseUrl")} required /></label>
       <HiddenField label="API-Schlüssel" value={form.apiKey} onChange={(v) => setForm({ ...form, apiKey: v })} />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmtDate, MATCH_LABEL, OUTBOX_LABEL, PLATFORM_LABEL } from "./api.ts";
 import { BatchApprove } from "./BatchApprove.tsx";
 import { CaseView } from "./CaseView.tsx";
+import { FetchStatus } from "./FetchStatus.tsx";
 import { deadlineState } from "../../../packages/core/deadline.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -167,6 +168,7 @@ export function Inbox({ workspaceId, role, openCase }: { workspaceId: string; ro
           {urgent > 0 ? <span className="deadline bad"><i aria-hidden="true" />{urgent === 1 ? "1 Fall mit knapper Frist" : `${urgent} Fälle mit knapper Frist`}</span> : <span className="muted">Keine Frist knapp</span>}
           <button className="link" onClick={switchNotify} title="Zeigt eine Browser-Benachrichtigung, solange SupportX in einem Tab offen ist.">{notify ? "Benachrichtigung aus" : "Benachrichtigen"}</button>
         </div>
+        <FetchStatus workspaceId={workspaceId} canFetch={role !== "viewer"} onFetched={load} />
         {query && <p className="muted small pad">{cases.length === 200 ? "Mehr als 200" : cases.length} {cases.length === 1 ? "Treffer" : "Treffer"} für „{query}“ in allen Fällen. <button className="link" onClick={() => setSearch("")}>Suche löschen</button></p>}
         {!query && filter === "info" && <p className="muted small pad">Newsletter, Aktionen und Partner-Infos. Sie bekommen keinen Antwortentwurf. Ist eine Kundenanfrage dabei, im Fall auf „Ist eine Kundenanfrage“ klicken.</p>}
         {error && <p className="error pad">{error}</p>}

@@ -120,7 +120,7 @@ Alle drei kommen per Schnittstelle, nicht per Mail. Mails der Marktplätze sind 
 **Shop Apotheke (Mirakl)**
 1. Im Mirakl-Backoffice von Shop Apotheke in den Benutzereinstellungen den API-Schlüssel kopieren und die Adresse der Instanz notieren (`https://….mirakl.net`).
 2. *Einstellungen → Shop Apotheke verbinden …*, Adresse und Schlüssel eintragen (Shop-ID nur bei mehreren Shops).
-3. Mirakl sieht das Lesen nur beim Öffnen des Posteingangs vor. SupportX liest deshalb nur bei *Jetzt abrufen*. Erlaubt Shop Apotheke einen Hintergrundabruf, den Nachweis bei der Verbindung eintragen; erst dann ruft der Worker alle 15 Minuten ab.
+3. Mirakl sieht das Lesen nur beim Öffnen des Posteingangs vor. SupportX liest deshalb, solange der Posteingang in einem sichtbaren Tab offen ist (höchstens alle 10 Minuten), und bei *Jetzt abrufen*. Wurde länger als 4 Stunden nicht abgerufen, warnen Posteingang und Karte. Erlaubt Shop Apotheke einen Hintergrundabruf, den Nachweis bei der Verbindung eintragen; erst dann ruft der Worker alle 15 Minuten ab.
 
 Versand freischalten wie in Abschnitt 8, mit einer kontrollierten Testantwort im Marktplatz selbst.
 
