@@ -314,3 +314,4 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; width: 1
 a.button.refund-due { background: var(--signal); border-color: var(--signal); color: #fff; box-shadow: 0 0 0 3px var(--bad-bg); }
 a.button.refund-due:hover { background: var(--bad); border-color: var(--bad); }
 .refund-flag { font-family: var(--mono); font-size: 11px; padding: 0 6px; background: var(--signal); color: #fff; border-radius: var(--radius); white-space: nowrap; }
+.resolve-at { margin: 6px 0 0; max-width: 34em; }
