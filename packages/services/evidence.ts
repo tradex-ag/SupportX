@@ -2,6 +2,7 @@ import { OWN_COPY_REASON, ownCopyText } from "../core/category.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { customerText } from "../core/customer-text.ts";
 import { RETURN_STATUS_DE, returnSummary } from "../core/returns.ts";
+import { formatMoney, returnCheck } from "../core/return-check.ts";
 import { renderPdf, type PdfBlock } from "../core/simple-pdf.ts";
 import { trackingHref } from "../core/tracking.ts";
 import { many, one } from "../storage/db.ts";
@@ -87,6 +88,18 @@ export async function evidencePdf(ctx: AppContext, actor: Actor, conversationId:
     for (const r of rs.returns) {
       b.push({ kind: "text", text: `Retoure ${r.returnNumber ?? r.id}${r.erpStatus ? ` · ${RETURN_STATUS_DE[r.erpStatus] ?? r.erpStatus}` : ""}${r.erpStatusAt ? ` (${when(r.erpStatusAt)})` : ""}` });
       if (r.items.length) kv("  Inhalt", r.items.map((i) => `${i.quantity} × ${i.title ?? "Position"}${i.reason ? ` (Grund: ${i.reason})` : ""}`).join(", "));
+    }
+    const check = returnCheck(order);
+    if (check.applicable) {
+      b.push({ kind: "text", text: `Retourenprüfung: ${check.receivedUnits} von ${check.baseUnits} Stück zurück.` });
+      for (const l of check.lines) {
+        b.push({ kind: "text", text: `  ${l.title}: bestellt ${l.ordered}, versendet ${l.shipped ?? "unbekannt"}, eingegangen ${l.received}${l.announced ? `, angemeldet ${l.announced}` : ""}` });
+      }
+      if (check.amounts) {
+        const m = (n: number) => formatMoney(n, check.amounts!.currency);
+        kv("  Beträge (brutto)", `Ware zurück ${m(check.amounts.goods)}, Versandkosten ${m(check.amounts.shipping)}, passend ${m(check.amounts.expected)}, Bestellung ${m(check.amounts.maximum)}${check.amounts.credited ? `, Gutschrift ${m(check.amounts.credited)}` : ""}`);
+      }
+      for (const f of check.findings) b.push({ kind: "text", text: `  ${f.tone === "bad" ? "Achtung: " : ""}${f.text}` });
     }
     if (order.invoices.length) {
       b.push({ kind: "heading", text: "Rechnungen" });

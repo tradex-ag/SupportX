@@ -11,7 +11,7 @@ export interface ReturnFact {
   erpStatusAt?: string;
   createdAt?: string;
   statusHistory: ReadonlyArray<{ status: string; at?: string }>;
-  items: ReadonlyArray<{ orderLineId?: string; title?: string; quantity: number; reason?: string }>;
+  items: ReadonlyArray<{ orderLineId?: string; articleId?: string; title?: string; quantity: number; reason?: string }>;
 }
 
 /** The parts of an order snapshot this module reads (structural, so the browser bundle needs no server types). */

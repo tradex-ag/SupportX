@@ -12,6 +12,7 @@ import { buildTimeline } from "../../../packages/core/timeline.ts";
 import { AmazonOfferCard, LISTING_STATE, listingActionText, type ListingAction } from "./AmazonOffer.tsx";
 import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
 import type { RefundDue } from "../../../packages/core/refund-due.ts";
+import { formatMoney, type ReturnCheck } from "../../../packages/core/return-check.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -72,6 +73,8 @@ interface CaseData {
   amazonListings?: { marketplaceIds: string[] } | null;
   /** Goods back in weclapp and no refund recorded yet: the refund is to be done. */
   refund?: RefundDue;
+  /** Returned quantities and amounts checked against the order (null when there is nothing to check). */
+  returnCheck?: ReturnCheck | null;
 }
 
 /** Readable names for the Protokoll; unknown actions show their technical name. */
@@ -740,7 +743,8 @@ function OrderPanel({ data, canEdit, onLink, onRefresh, invoiceFiles, documentBa
         <OrderDetails
           order={order}
           refund={data.refund}
-          returns={<ReturnBox order={order} canEdit={canEdit} onRefresh={onRefresh} />}
+          check={data.returnCheck ?? null}
+          returns={<><ReturnBox order={order} canEdit={canEdit} onRefresh={onRefresh} />{data.returnCheck?.applicable && <ReturnCheckBox check={data.returnCheck} />}</>}
           links={orderLinks({
             order,
             platforms: [c.source_platform, data.accounts.find((a) => a.id === c.merchant_account_id)?.platform],
@@ -826,6 +830,43 @@ function ReturnBox({ order, canEdit, onRefresh }: { order: OrderSnapshot; canEdi
   );
 }
 
+/** Returned units per position against ordered and shipped, and the amount that fits the return. */
+function ReturnCheckBox({ check }: { check: ReturnCheck }) {
+  const a = check.amounts;
+  const money = (n: number) => formatMoney(n, a?.currency);
+  const announced = check.lines.some((l) => l.announced > 0);
+  const toneText: Record<string, string> = { good: "ok-text", warn: "warn-text", bad: "error", neutral: "muted" };
+  return (
+    <div className={`return-box return-check ${TONE_CLASS[check.tone]}`}>
+      <div className="row wrap"><h4>Retourenprüfung</h4><span className={`pill ${TONE_CLASS[check.tone]}`}>{check.receivedUnits} von {check.baseUnits} Stück zurück</span></div>
+      <div className="table-wrap"><table className="small">
+        <thead><tr><th>Position</th><th>bestellt</th><th>versendet</th><th>zurück</th>{announced && <th>angemeldet</th>}</tr></thead>
+        <tbody>
+          {check.lines.map((l) => (
+            <tr key={l.lineId}>
+              <td>{l.title}{a && l.unitGross !== undefined && <span className="muted"> (je {money(l.unitGross)})</span>}</td><td>{l.ordered}</td><td>{l.shipped ?? "?"}</td>
+              <td className={l.received > l.ordered || (l.shipped !== undefined && l.received > l.shipped) ? "error" : undefined}>{l.received}</td>
+              {announced && <td>{l.announced || ""}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+      {a && (
+        <p className="small">
+          Ware zurück <strong>{money(a.goods)}</strong> · Versandkosten der Bestellung {money(a.shipping)}{check.complete ? " (bei vollständiger Rücksendung mit erstatten)" : " (Teilretoure: nicht automatisch mit erstatten)"} ·
+          {" "}passend <strong>{money(a.expected)}</strong> · höchstens {money(a.maximum)}
+          {a.credited > 0 && <> · Gutschrift {money(a.credited)}{a.creditedShipping > 0 ? ` (davon Versand ${money(a.creditedShipping)})` : ""}</>}
+          {a.noticed > 0 && <> · Marktplatz-Erstattung {money(a.noticed)}</>}
+        </p>
+      )}
+      <ul>
+        {check.findings.map((f, i) => <li key={i} className={`small ${toneText[f.tone]}`}>{f.text}</li>)}
+      </ul>
+      <p className="muted small">Beträge brutto laut weclapp. Rücksendekosten stehen nicht in weclapp: Ob der Kunde sie trägt, richtet sich nach euren Bedingungen.</p>
+    </div>
+  );
+}
+
 /** Ordered weight (article master data) against the booked package weight: a strong hint when something is missing. */
 function WeightBox({ order }: { order: OrderSnapshot }) {
   const checks = weightChecks(order);
@@ -852,14 +893,17 @@ function WeightBox({ order }: { order: OrderSnapshot }) {
   );
 }
 
-function OrderDetails({ order, links, invoices, returns, refund }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode; returns: React.ReactNode; refund?: RefundDue }) {
+function OrderDetails({ order, links, invoices, returns, refund, check }: { order: OrderSnapshot; links: OrderLink[]; invoices: React.ReactNode; returns: React.ReactNode; refund?: RefundDue; check?: ReturnCheck | null }) {
   const due = refund?.state === "due";
+  const blockers = check?.findings.filter((f) => f.tone === "bad") ?? [];
   const hasRefundLink = links.some((l) => l.kind === "refund");
   return (
     <div className="order">
       {due && (
         <div className="refund-due-notice" role="status">
           <strong>{refund!.headline}</strong>
+          {blockers.length > 0 && <span className="small"><strong>Vorher prüfen:</strong> {blockers.map((b) => b.text).join(" ")}</span>}
+          {check?.amounts && <span className="small">Passender Betrag laut Retoure: {formatMoney(check.amounts.expected, check.amounts.currency)}{check.complete ? "" : " (Teilretoure)"}.</span>}
           <span className="small">{hasRefundLink ? "Über „Bestellung erstatten“ im Marktplatz erstatten und danach unten unter Ergebnis „Erstattet“ wählen." : "Im Marktplatz bzw. in weclapp erstatten und danach unten unter Ergebnis „Erstattet“ wählen."}</span>
         </div>
       )}

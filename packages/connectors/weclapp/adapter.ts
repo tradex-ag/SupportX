@@ -64,6 +64,12 @@ function arr(value: unknown): Json[] {
   return Array.isArray(value) ? (value.filter((v) => v && typeof v === "object") as Json[]) : [];
 }
 
+/** Sum of grossAmount over shipping cost items; undefined when the record has no such list. */
+function shippingGross(record: Json): number | undefined {
+  if (!Array.isArray(record.shippingCostItems)) return undefined;
+  return arr(record.shippingCostItems).reduce((sum, item) => sum + (num(item.grossAmount) ?? 0), 0);
+}
+
 export function validateWeclappBaseUrl(baseUrl: string, allowTestEndpoints: boolean): string {
   const url = assertAllowedEndpoint(baseUrl, allowTestEndpoints, (u) => u.hostname.endsWith(".weclapp.com"));
   const normalized = url.toString().replace(/\/+$/, "");
@@ -172,11 +178,13 @@ export function mapReturn(record: Json, linesById: Map<string, OrderLineFact>, r
     statusHistory: history,
     items: arr(record.incomingGoodsItems).map((item) => {
       const lineId = str(item.salesOrderItemId);
+      const articleId = str(item.articleId);
       const reasonIds = [str(item.returnReasonId), ...arr(item.returnReasons).map((r) => str(r.id))].filter((v): v is string => !!v);
       const reasons = [...new Set(reasonIds.map((r) => reasonNames.get(r)).filter((v): v is string => !!v))];
       const reason = reasons.length ? reasons.join(", ") : str(item.returnDescription);
       return {
         orderLineId: lineId,
+        ...(articleId ? { articleId } : {}),
         title: str(item.title) ?? (lineId ? linesById.get(lineId)?.title : undefined),
         quantity: num(item.quantity) ?? 0,
         ...(reason ? { reason } : {}),
@@ -191,7 +199,7 @@ export interface ReturnsRead {
   error?: string;
 }
 
-export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retrievedAt: string, articles: Json[] = [], returns?: ReturnsRead, weightsRead = true): OrderRecord {
+export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retrievedAt: string, articles: Json[] = [], returns?: ReturnsRead, weightsRead = true, currency?: string): OrderRecord {
   const articlesById = new Map(articles.map((a) => [String(a.id), a]));
   const lines: OrderLineFact[] = arr(order.orderItems).map((item, i) => {
     const article = articlesById.get(str(item.articleId) ?? "");
@@ -207,6 +215,7 @@ export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retri
       quantity: num(item.quantity) ?? 0,
       shippedQuantity: num(item.shippedQuantity),
       returnedQuantity: num(item.returnedQuantity),
+      ...(num(item.grossAmount) !== undefined ? { grossAmount: num(item.grossAmount) } : {}),
       ...(grossWeightKg !== undefined ? { grossWeightKg } : {}),
       ...(netWeightKg !== undefined ? { netWeightKg } : {}),
     };
@@ -219,7 +228,11 @@ export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retri
     status: str(inv.status),
     paymentStatus: str(inv.paymentStatus),
     type: str(inv.salesInvoiceType),
+    ...(num(inv.grossAmount) !== undefined ? { grossAmount: num(inv.grossAmount) } : {}),
+    ...(shippingGross(inv) !== undefined ? { shippingGrossAmount: shippingGross(inv) } : {}),
   }));
+  const grossAmount = num(order.grossAmount);
+  const shippingGrossAmount = shippingGross(order);
   return {
     provider: "weclapp",
     id: String(order.id),
@@ -244,6 +257,11 @@ export function mapOrder(order: Json, shipments: Json[], invoices: Json[], retri
           ...(returns.error ? { returnsError: returns.error } : {}),
         }
       : {}),
+    ...(grossAmount !== undefined ? { grossAmount } : {}),
+    ...(shippingGrossAmount !== undefined ? { shippingGrossAmount } : {}),
+    ...(currency ? { currency } : {}),
+    // Amounts count as read when the order carries its total; shipping may be absent (free shipping).
+    ...(grossAmount !== undefined ? { amountsRead: true } : {}),
     ...(weightsRead ? { weightsRead: true } : {}),
     retrievedAt,
   };
@@ -322,9 +340,9 @@ export class WeclappOrderProvider implements OrderProvider {
     }
     if (rejected.length) console.warn(`[weclapp] Filter abgelehnt, Daten fehlen evtl. am Auftrag: ${rejected.join(", ")}`);
     const ownShipments = shipments.filter((s) => belongsToOrder(s, id));
-    const [articles, returns] = await Promise.all([this.#articles(order), this.#returns(order, ownShipments)]);
+    const [articles, returns, currency] = await Promise.all([this.#articles(order), this.#returns(order, ownShipments), this.#currency(str(order.recordCurrencyId))]);
     // Weights count as read only when every linked article could be read.
-    return mapOrder(order, ownShipments, [...invoices.values()], new Date().toISOString(), articles.rows, returns, !articles.failed);
+    return mapOrder(order, ownShipments, [...invoices.values()], new Date().toISOString(), articles.rows, returns, !articles.failed, currency);
   }
 
   /**
@@ -360,6 +378,17 @@ export class WeclappOrderProvider implements OrderProvider {
         ? "Der weclapp-Benutzer darf Wareneingänge (Retouren) nicht lesen."
         : `Retouren konnten nicht gelesen werden: ${(error as Error).message}`;
       return { records: [], error: detail };
+    }
+  }
+
+  /** Name of the order currency (e.g. "EUR"). Best effort: a failure only drops the currency label. */
+  async #currency(currencyId: string | undefined): Promise<string | undefined> {
+    if (!currencyId) return undefined;
+    try {
+      const row = (await this.#get("currency", { "id-eq": currencyId, pageSize: "1" })).find((c) => String(c.id) === currencyId);
+      return str(row?.name);
+    } catch {
+      return undefined;
     }
   }
 

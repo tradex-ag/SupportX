@@ -184,6 +184,8 @@ export interface OrderLineFact {
   quantity: number;
   shippedQuantity?: number;
   returnedQuantity?: number;
+  /** Line total incl. VAT and line discount in the order currency (weclapp salesOrderItem.grossAmount). */
+  grossAmount?: number;
   /** Weight of one unit from the linked ERP article, in kg (weclapp articleGrossWeight / articleNetWeight). */
   grossWeightKg?: number;
   netWeightKg?: number;
@@ -229,6 +231,10 @@ export interface InvoiceFact {
   paymentStatus?: string;
   /** e.g. STANDARD_INVOICE, CREDIT_NOTE (weclapp salesInvoiceType). */
   type?: string;
+  /** Total incl. VAT in the record currency (weclapp salesInvoice.grossAmount). */
+  grossAmount?: number;
+  /** Shipping cost items on this invoice or credit note, incl. VAT (sum of shippingCostItems[].grossAmount). */
+  shippingGrossAmount?: number;
 }
 
 export interface OrderRecord {
@@ -252,6 +258,14 @@ export interface OrderRecord {
   returns?: ReadonlyArray<ReturnFact>;
   /** Reading the returns failed or was refused by the tenant; the list may be incomplete. */
   returnsError?: string;
+  /** Order total incl. VAT and shipping (weclapp salesOrder.grossAmount). */
+  grossAmount?: number;
+  /** Shipping costs charged on the order, incl. VAT (sum of shippingCostItems[].grossAmount). */
+  shippingGrossAmount?: number;
+  /** Order currency, e.g. "EUR" (weclapp currency.name of recordCurrencyId); undefined when it could not be read. */
+  currency?: string;
+  /** True when amounts were read; snapshots taken before lack the flag and show no amount check. */
+  amountsRead?: boolean;
   /** True when article and package weights were read; snapshots taken before lack the flag. */
   weightsRead?: boolean;
   /** When this application fetched the record. Event times are kept per fact. */
