@@ -9,7 +9,7 @@
  * done once an owner has ticked it off (`confirmations`).
  */
 
-export type StepAction = "connect" | "ebay_login" | "check" | "rule" | "route" | "erp" | "confirm" | "unconfirm";
+export type StepAction = "connect" | "credentials" | "ebay_login" | "check" | "rule" | "route" | "erp" | "confirm" | "unconfirm";
 
 export interface SetupStep {
   key: string;
@@ -68,6 +68,11 @@ function finish(key: string, label: string, way: string, steps: SetupStep[], con
   return { key, label, way, steps, connected, error, next: steps.find((s) => !s.done) ?? null };
 }
 
+/** True when the marketplace refused the stored keys (as opposed to a timeout or an outage). */
+export function rejectedKeys(error: string): boolean {
+  return /\(401\)|\b401\b|Zugang abgelehnt|invalid_client|unauthori[sz]ed|not known/i.test(error);
+}
+
 const healthy = (c: { health: string; paused: boolean }) => c.health === "ok" && !c.paused;
 
 export function microsoftSetup(input: SetupInput): ChannelSetup {
@@ -97,6 +102,8 @@ export function marketSetup(market: Market, input: SetupInput): ChannelSetup {
     // Without a connection, "test" and "log in" have nothing to act on.
     if (own.length === 0) for (const step of steps) if (step.action !== "connect") delete step.action;
     const err = own.find((c) => c.health === "error" && !c.paused)?.last_error ?? null;
+    // Keys refused by the marketplace: the next thing to do is to enter new ones, not to test again.
+    if (err && rejectedKeys(err) && !own.some(healthy)) steps[0] = { key: "connect", title: "Zugangsdaten erneuern", hint: `${LABEL[market]} lehnt die gespeicherten Schlüssel ab. Neue eintragen, Fälle und Einstellungen bleiben erhalten.`, done: false, action: "credentials" };
     return { ...finish(market, LABEL[market], WAY[market], steps, own.some(healthy), err), sending: sendingOf(market, own.find(healthy), input) };
   }
   const graph = input.connections.filter((c) => c.kind === "microsoft_graph");

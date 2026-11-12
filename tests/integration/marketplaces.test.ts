@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { getMessageAttachment, listMessageAttachments } from "../../packages/services/attachments.ts";
 import { after, afterEach, describe, it } from "node:test";
-import { completeEbayConsent, createEbayConnection, createKauflandConnection, createMiraklConnection, setMiraklBackgroundSync, setSendEnabled, startEbayConsent, verifyReplyRoute } from "../../packages/services/connections.ts";
+import { checkChannel, completeEbayConsent, createEbayConnection, createKauflandConnection, createMiraklConnection, replaceMarketplaceCredentials, setMiraklBackgroundSync, setSendEnabled, startEbayConsent, verifyReplyRoute } from "../../packages/services/connections.ts";
 import type { ServiceError } from "../../packages/services/context.ts";
 import { enqueue } from "../../packages/services/jobs.ts";
 import { approveDraft, dispatchOutbox, queueReply, reconcileOutbox } from "../../packages/services/replies.ts";
@@ -208,5 +208,72 @@ describe("eBay account deletion notifications", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe("Replacing marketplace keys", () => {
+  it("Kaufland: a refused key pair is replaced in place, cases and settings stay", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    const fake = await startFakeKaufland(KFL);
+    closers.push(() => fake.close());
+    const id = await createKauflandConnection(h.ctx, s.owner, { displayName: "Kaufland DE", clientKey: "old-key", secretKey: "old-secret", storefronts: ["de"], baseUrl: fake.baseUrl });
+    const failed = await checkChannel(h.ctx, s.owner, id);
+    assert.equal(failed.ok, false);
+    const before = (await one<{ secret_id: string; health: string }>(h.ctx.db, "SELECT secret_id, health FROM channel_connections WHERE id = $1", [id]))!;
+    assert.equal(before.health, "error");
+
+    await rejectsWith(replaceMarketplaceCredentials(h.ctx, s.agent, id, KFL), "FORBIDDEN");
+    await rejectsWith(replaceMarketplaceCredentials(h.ctx, s.owner, id, { clientKey: "only-one" }), "INVALID");
+    const other = await seedWorkspace(h, "Anderer Händler");
+    await rejectsWith(replaceMarketplaceCredentials(h.ctx, other.owner, id, KFL), "NOT_FOUND");
+
+    await replaceMarketplaceCredentials(h.ctx, s.owner, id, { clientKey: ` ${KFL.clientKey} `, secretKey: KFL.secretKey });
+    const after_ = (await one<{ secret_id: string; health: string; last_error: string | null; config: { storefronts: string[] }; display_name: string }>(h.ctx.db, "SELECT * FROM channel_connections WHERE id = $1", [id]))!;
+    assert.notEqual(after_.secret_id, before.secret_id);
+    assert.equal(after_.health, "unknown");
+    assert.equal(after_.last_error, null);
+    assert.deepEqual(after_.config.storefronts, ["de"], "settings kept");
+    assert.equal(after_.display_name, "Kaufland DE");
+    assert.equal(await one(h.ctx.db, "SELECT 1 FROM secrets WHERE id = $1", [before.secret_id]), null, "old keys deleted");
+    assert.equal((await checkChannel(h.ctx, s.owner, id)).ok, true);
+  });
+
+  it("Shop Apotheke: new API key; Microsoft connections are refused", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    const fake = await startFakeMirakl({ apiKey: "new-key" });
+    closers.push(() => fake.close());
+    const id = await createMiraklConnection(h.ctx, s.owner, { displayName: "Shop Apotheke", baseUrl: fake.baseUrl, apiKey: "old-key" });
+    assert.equal((await checkChannel(h.ctx, s.owner, id)).ok, false);
+    await replaceMarketplaceCredentials(h.ctx, s.owner, id, { apiKey: "new-key" });
+    assert.equal((await checkChannel(h.ctx, s.owner, id)).ok, true);
+    await rejectsWith(replaceMarketplaceCredentials(h.ctx, s.owner, s.connectionId, { apiKey: "x" }), "INVALID");
+  });
+
+  it("eBay: a new Cert ID keeps the seller login, a new App ID asks for a new login", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    const fake = await startFakeEbay({ clientId: "app-id", clientSecret: "cert-id", seller: "demo_shop", authCode: "code-1", refreshToken: "refresh-1" });
+    closers.push(() => fake.close());
+    const id = await createEbayConnection(h.ctx, s.owner, { displayName: "eBay", clientId: "app-id", clientSecret: "old-cert", ruName: "RuName", authBaseUrl: fake.baseUrl, apiBaseUrl: fake.baseUrl, identityBaseUrl: fake.baseUrl });
+    await replaceMarketplaceCredentials(h.ctx, s.owner, id, { clientSecret: "cert-id" });
+    const state = new URL(await startEbayConsent(h.ctx, s.owner, id)).searchParams.get("state")!;
+    await completeEbayConsent(h.ctx, s.ownerUserId, { state, code: "code-1" });
+
+    const kept = await replaceMarketplaceCredentials(h.ctx, s.owner, id, { clientSecret: "cert-id" });
+    assert.equal(kept.needsEbayLogin, false);
+    const row = (await one<{ secret_id: string; config: Record<string, unknown> }>(h.ctx.db, "SELECT secret_id, config FROM channel_connections WHERE id = $1", [id]))!;
+    assert.equal(row.config.sellerUsername, "demo_shop");
+    assert.equal(JSON.parse(await h.ctx.secrets.read(h.ctx.db, s.workspaceId, row.secret_id)).refreshToken, "refresh-1");
+    assert.equal((await checkChannel(h.ctx, s.owner, id)).ok, true);
+
+    const moved = await replaceMarketplaceCredentials(h.ctx, s.owner, id, { clientId: "other-app", clientSecret: "other-cert" });
+    assert.equal(moved.needsEbayLogin, true);
+    const row2 = (await one<{ secret_id: string; config: Record<string, unknown> }>(h.ctx.db, "SELECT secret_id, config FROM channel_connections WHERE id = $1", [id]))!;
+    assert.equal(row2.config.clientId, "other-app");
+    assert.equal(row2.config.ruName, "RuName");
+    assert.equal(row2.config.sellerUsername, undefined);
+    assert.equal(JSON.parse(await h.ctx.secrets.read(h.ctx.db, s.workspaceId, row2.secret_id)).refreshToken, undefined);
   });
 });
