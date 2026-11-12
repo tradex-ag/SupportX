@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api.ts";
 import { Inbox } from "./Inbox.tsx";
+import { Refunds } from "./Refunds.tsx";
 import { Report } from "./Report.tsx";
 import { Settings } from "./Settings.tsx";
 
@@ -58,7 +59,10 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [view, setView] = useState<"inbox" | "report" | "settings">("inbox");
+  const [view, setView] = useState<"inbox" | "refunds" | "report" | "settings">("inbox");
+  // A case opened from another page (e.g. the refund list) shows in the inbox.
+  const [openCase, setOpenCase] = useState<{ id: string; n: number } | null>(null);
+  const [refundsOpen, setRefundsOpen] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +78,17 @@ export function App() {
   }, []);
   useEffect(() => void load(), [load]);
   const own = useWorkspaceTheme(me ? workspaceId : null);
+  // Open refunds for the menu, refreshed every minute.
+  useEffect(() => {
+    if (!me || !workspaceId) return;
+    let alive = true;
+    const load = () => api<{ counts: { open: number } }>("GET", `/api/w/${workspaceId}/refunds?filter=open`).then((r) => { if (alive) setRefundsOpen(r.counts.open); }, () => {});
+    void load();
+    const timer = setInterval(load, 60_000);
+    // A case changed its outcome: update the count at once.
+    window.addEventListener("supportx-refunds", load);
+    return () => { alive = false; clearInterval(timer); window.removeEventListener("supportx-refunds", load); };
+  }, [me, workspaceId]);
   const brand = { ...installBrand, productName: own.name ?? installBrand.productName, logoUrl: own.logoUrl ?? installBrand.logoUrl };
 
   // Return from the eBay consent: finish it with a same-origin API call (the session
@@ -120,7 +135,10 @@ export function App() {
           <span className="muted">{workspace?.name}</span>
         )}
         <nav>
-          <button className={view === "inbox" ? "tab active" : "tab"} onClick={() => setView("inbox")}>Posteingang</button>
+          <button className={view === "inbox" ? "tab active" : "tab"} onClick={() => { setOpenCase(null); setView("inbox"); }}>Posteingang</button>
+          <button className={view === "refunds" ? "tab active" : "tab"} onClick={() => setView("refunds")} title="Erstattungen, die in weclapp noch zu machen sind">
+            Erstattungen{refundsOpen ? <span className="count" aria-label={`${refundsOpen} offen`}>{refundsOpen}</span> : null}
+          </button>
           <button className={view === "report" ? "tab active" : "tab"} onClick={() => setView("report")}>Auswertung</button>
           <button className={view === "settings" ? "tab active" : "tab"} onClick={() => setView("settings")}>Einstellungen</button>
         </nav>
@@ -135,7 +153,10 @@ export function App() {
       {!workspace ? (
         <div className="center muted">Kein Arbeitsbereich zugeordnet.</div>
       ) : view === "inbox" ? (
-        <Inbox workspaceId={workspace.id} role={workspace.role} />
+        <Inbox workspaceId={workspace.id} role={workspace.role} openCase={openCase} />
+      ) : view === "refunds" ? (
+        <Refunds workspaceId={workspace.id} role={workspace.role} onCounts={setRefundsOpen}
+          onOpenCase={(id) => { setOpenCase((o) => ({ id, n: (o?.n ?? 0) + 1 })); setView("inbox"); }} />
       ) : view === "report" ? (
         <Report workspaceId={workspace.id} />
       ) : (

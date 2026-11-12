@@ -57,6 +57,7 @@ export async function handleEbayAccountDeletion(ctx: AppContext, rawBody: string
     for (const [ws, ids] of byWorkspace) {
       await tx.query("DELETE FROM jobs WHERE workspace_id = $1 AND payload->>'conversationId' = ANY($2::text[])", [ws, ids]);
       await tx.query("DELETE FROM message_forwards WHERE workspace_id = $1 AND conversation_id = ANY($2::uuid[])", [ws, ids]);
+      await tx.query("DELETE FROM refund_entries WHERE workspace_id = $1 AND conversation_id = ANY($2::uuid[])", [ws, ids]);
       await tx.query("DELETE FROM outbox WHERE workspace_id = $1 AND conversation_id = ANY($2::uuid[])", [ws, ids]);
       await tx.query("DELETE FROM conversations WHERE workspace_id = $1 AND id = ANY($2::uuid[])", [ws, ids]);
       // The audit keeps only a hash, never the eBay name.

@@ -19,6 +19,8 @@ import { TOPICS } from "../core/topic.ts";
 import { isRefundNotice, refundDue, type RefundDue, type RelatedRefundCase } from "../core/refund-due.ts";
 import { returnSummary, type ReturnOrderInput } from "../core/returns.ts";
 import { refundNoticeAmount, returnCheck, type RefundNoticeAmount, type ReturnCheck } from "../core/return-check.ts";
+import { caseRefundStatus } from "./refunds.ts";
+import { parseAmountInput } from "../core/refund-list.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
 
@@ -228,8 +230,9 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const invoices = invoiceSummary(link?.status === "unique" ? link.snapshot : null);
   const forwards = await caseForwards(ctx, ws, conversationId);
   const [listingActions, amazonListings] = await Promise.all([listCaseListingActions(ctx.db, ws, conversationId), caseAmazonListingAccess(ctx.db, ws)]);
+  const refundList = await caseRefundStatus(ctx, ws, conversationId);
   const { refund, returnCheck: returnCheckResult } = await refundDueFor(ctx, ws, conversationId, conversation as { outcome: string | null; subject: string | null }, orderLink as { status: string; external_order_id: string | null; snapshot: OrderRecord | null } | null);
-  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund, returnCheck: returnCheckResult };
+  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund, returnCheck: returnCheckResult, refundList };
 }
 
 /**
@@ -483,10 +486,17 @@ export async function leavePresence(ctx: AppContext, actor: Actor, conversationI
 export const OUTCOMES = ["none", "replacement", "refund", "partial_refund", "return", "question", "other"] as const;
 
 /** Records what was done for the customer (or clears it with null). */
-export async function setOutcome(ctx: AppContext, actor: Actor, conversationId: string, input: { outcome: string | null; note?: string }): Promise<void> {
+export async function setOutcome(ctx: AppContext, actor: Actor, conversationId: string, input: { outcome: string | null; note?: string; amount?: string | null }): Promise<void> {
   requireRole(actor, ["owner", "agent"]);
   assertId(conversationId);
   if (input.outcome !== null && !(OUTCOMES as readonly string[]).includes(input.outcome)) throw new ServiceError(400, "INVALID", "Ungültige Maßnahme.");
+  const isRefund = input.outcome === "refund" || input.outcome === "partial_refund";
+  // Refunded amount for the refund list ("Erstattungen"), only with a refund outcome.
+  let amount: number | null | undefined;
+  if (isRefund && input.amount !== undefined) {
+    amount = input.amount === null ? null : parseAmountInput(input.amount);
+    if (amount === undefined) throw new ServiceError(400, "INVALID", "Betrag bitte als Zahl eingeben, z. B. 12,50.");
+  }
   const note = input.note?.trim().slice(0, 2000) || null;
   await withTx(ctx.db, async (tx) => {
     const res = await tx.query(
@@ -494,7 +504,18 @@ export async function setOutcome(ctx: AppContext, actor: Actor, conversationId: 
       [actor.workspaceId, conversationId, input.outcome, input.outcome === null ? null : note, input.outcome !== null && actor.type === "user" ? actor.userId : null],
     );
     if (res.rowCount === 0) throw new ServiceError(404, "NOT_FOUND", "Fall nicht gefunden.");
-    await audit(tx, actor, "conversation.outcome", "conversation", conversationId, { outcome: input.outcome });
+    // "Erstattet" again after the case was taken off the refund list: it belongs on it.
+    if (isRefund) {
+      await tx.query("UPDATE refund_entries SET removed_at = NULL, updated_at = now() WHERE workspace_id = $1 AND conversation_id = $2 AND removed_at IS NOT NULL", [actor.workspaceId, conversationId]);
+      if (amount !== undefined) {
+        await tx.query(
+          `INSERT INTO refund_entries (workspace_id, conversation_id, amount_cents, currency, created_by) VALUES ($1, $2, $3::int, CASE WHEN $3::int IS NULL THEN NULL ELSE 'EUR' END, $4)
+           ON CONFLICT (workspace_id, conversation_id) DO UPDATE SET amount_cents = $3::int, currency = CASE WHEN $3::int IS NULL THEN NULL ELSE coalesce(refund_entries.currency, 'EUR') END, updated_at = now()`,
+          [actor.workspaceId, conversationId, amount, actorId(actor)],
+        );
+      }
+    }
+    await audit(tx, actor, "conversation.outcome", "conversation", conversationId, { outcome: input.outcome, ...(amount !== undefined ? { amountCents: amount } : {}) });
   });
 }
 

@@ -72,11 +72,12 @@ export const INTENT_LABEL: Record<string, string> = {
   other: "Sonstiges",
 };
 
-export function Inbox({ workspaceId, role }: { workspaceId: string; role: Role }) {
+export function Inbox({ workspaceId, role, openCase }: { workspaceId: string; role: Role; openCase?: { id: string; n: number } | null }) {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("open");
   const [cases, setCases] = useState<CaseRow[]>([]);
   const [counts, setCounts] = useState<Counts | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(openCase?.id ?? null);
+  useEffect(() => { if (openCase) setSelected(openCase.id); }, [openCase]);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
