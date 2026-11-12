@@ -347,3 +347,13 @@ a.button.refund-due:hover { background: var(--bad); border-color: var(--bad); }
 }
 /* Four menu points: let the menu wrap on a phone instead of scrolling sideways. */
 .topbar nav { flex-wrap: wrap; min-width: 0; }
+.pill.refund-open { background: var(--bad-bg); color: var(--bad); border-color: var(--signal); }
+.close-case { margin: 8px 0; border-left: 3px solid var(--text); display: flex; flex-direction: column; gap: 10px; }
+.close-case h3 { margin: 0; }
+.close-case p { margin: 0; }
+.close-case-fields { align-items: flex-end; gap: 12px; }
+.close-case-fields .field input { min-width: 140px; }
+.close-case-fields .grow { flex: 1 1 260px; }
+.close-case-fields .grow input { width: 100%; }
+.close-case .actions { margin-top: 0; }
+.chip.active:hover:not(:disabled) { background: var(--graphite); border-color: var(--graphite); color: #fff; }

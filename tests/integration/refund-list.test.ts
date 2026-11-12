@@ -78,4 +78,25 @@ describe("Erstattungsliste", () => {
     await setOutcome(h.ctx, s.agent, conv.id, { outcome: "partial_refund" });
     assert.equal((await listRefunds(h.ctx, s.agent, "open")).items[0]!.kind, "partial");
   });
+
+  it("records the refunded amount with the outcome when a case is closed", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    loadDemoMails(h.graph);
+    await syncAndDrain(h, s);
+    const conv = await caseByThread(h, s, "conv-amazon-wismo");
+    await assert.rejects(setOutcome(h.ctx, s.agent, conv.id, { outcome: "partial_refund", amount: "ein Viertel" }), { status: 400 });
+    assert.equal((await listRefunds(h.ctx, s.agent, "all")).items.length, 0, "nothing stored on a bad amount");
+
+    await setOutcome(h.ctx, s.agent, conv.id, { outcome: "partial_refund", note: "25 % für fehlende Packung, keine Retoure", amount: "8,25" });
+    const c = await getCase(h.ctx, s.agent, conv.id);
+    assert.equal(c.refundList.state, "open");
+    assert.deepEqual(c.refundList.item!.amount, { cents: 825, currency: "EUR", from: "entered" });
+    const item = (await listRefunds(h.ctx, s.agent, "open")).items[0]!;
+    assert.equal(item.kind, "partial");
+    assert.equal(item.note, "25 % für fehlende Packung, keine Retoure");
+    // An amount without a refund outcome is ignored.
+    await setOutcome(h.ctx, s.agent, conv.id, { outcome: "replacement", amount: "99" });
+    assert.equal((await listRefunds(h.ctx, s.agent, "all")).items.length, 0);
+  });
 });

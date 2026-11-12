@@ -12,6 +12,7 @@ import { buildTimeline } from "../../../packages/core/timeline.ts";
 import { AmazonOfferCard, LISTING_STATE, listingActionText, type ListingAction } from "./AmazonOffer.tsx";
 import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } from "../../../packages/core/returns.ts";
 import type { RefundDue } from "../../../packages/core/refund-due.ts";
+import { formatAmount, type RefundListItem } from "../../../packages/core/refund-list.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -73,7 +74,7 @@ interface CaseData {
   /** Goods back in weclapp and no refund recorded yet: the refund is to be done. */
   refund?: RefundDue;
   /** Where the case stands on the refund list ("Erstattungen"). */
-  refundList?: { state: "none" | "open" | "done"; removed: boolean; item: { done: { at: string; by: string | null; creditNoteNumber: string | null } | null } | null };
+  refundList?: { state: "none" | "open" | "done"; removed: boolean; item: Pick<RefundListItem, "done" | "amount" | "kind"> | null };
 }
 
 /** Readable names for the Protokoll; unknown actions show their technical name. */
@@ -111,6 +112,8 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
 
   // Who else has this case open: a heartbeat every 15 seconds, at once when writing starts or stops.
   const [editing, setEditing] = useState(false);
+  // "Erledigt" asks once what was done, so a refund lands on the refund list with its amount.
+  const [closing, setClosing] = useState(false);
   const [others, setOthers] = useState<Array<{ name: string; editing: boolean }>>([]);
   useEffect(() => {
     const beat = () => api<{ others: Array<{ name: string; editing: boolean }> }>("POST", `${base}/cases/${caseId}/presence`, { editing }).then((r) => setOthers(r.others), () => undefined);
@@ -139,6 +142,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
     try {
       const result = await fn();
       if (success) setNotice(typeof success === "function" ? success(result) : success);
+      window.dispatchEvent(new Event("supportx-refunds"));
       await load();
       onChanged();
     } catch (err) {
@@ -222,6 +226,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               return <span className={`pill ${TONE_CLASS[rs.tone]}`} title={rs.advice}>Retoure: {rs.label}</span>;
             })()}
             {due && <span className={`deadline ${due.tone}`} title={`${c.reply_hours} Std. ab der ersten unbeantworteten Kundennachricht`}><i aria-hidden="true" />Antwort fällig {fmtDate(due.dueAt.toISOString())}, {due.label}</span>}
+            <RefundPill data={data} />
           </div>
         </div>
         {canEdit && (
@@ -230,7 +235,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               <div className="status-buttons" role="group" aria-labelledby="case-status-label">
                 {CASE_STATUS.map((st) => (
                   <button key={st.value} className={`status-${st.value}${c.status === st.value ? " active" : ""}`} aria-pressed={c.status === st.value}
-                    onClick={() => c.status !== st.value && act(() => api("POST", `${base}/cases/${caseId}/status`, { status: st.value }))}>
+                    onClick={() => c.status !== st.value && (st.value === "closed" && c.category === "support" ? setClosing(true) : act(() => api("POST", `${base}/cases/${caseId}/status`, { status: st.value })))}>
                     <i aria-hidden="true" />{st.label}
                   </button>
                 ))}
@@ -255,6 +260,16 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
             ? `${others.filter((o) => o.editing).map((o) => o.name).join(", ")} schreibt gerade an einer Antwort. Bitte absprechen, bevor du auch antwortest.`
             : `${others.map((o) => o.name).join(", ")} hat diesen Fall gerade offen.`}
         </p>
+      )}
+      {closing && canEdit && (
+        <CloseCase key={c.outcome ?? "none"} data={data} onCancel={() => setClosing(false)}
+          onClose={async (outcome, note, amount) => {
+            setClosing(false);
+            await act(async () => {
+              if (outcome !== undefined) await api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note, ...(amount !== undefined ? { amount } : {}) });
+              await api("POST", `${base}/cases/${caseId}/status`, { status: "closed" });
+            }, outcome === "refund" || outcome === "partial_refund" ? "Erledigt. Die Erstattung steht auf der Erstattungsliste." : "Erledigt.");
+          }} />
       )}
       {error && <p className="notice bad">{error}</p>}
       {notice && <p className="notice ok">{notice}</p>}
@@ -346,7 +361,7 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               onDone={() => { void load(); onChanged(); }}
             />
           )}
-          <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note }), "Gespeichert.")}
+          <Outcome key={`${c.id}:${c.outcome_at ?? ""}`} data={data} canEdit={canEdit} onSave={(outcome, note, amount) => act(() => api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note, ...(amount !== undefined ? { amount } : {}) }), "Gespeichert.")}
             onAddToRefunds={() => act(() => api("POST", `${base}/cases/${caseId}/refund-list`), "Steht jetzt auf der Erstattungsliste.")} />
           <CustomerHistory history={data.customerHistory} onOpen={onOpenCase} />
           {canEdit && (
@@ -682,9 +697,12 @@ export const OUTCOME_LABEL: Record<string, string> = {
 };
 
 /** What was answered and what was done afterwards: the base for later automation. */
-function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; canEdit: boolean; onSave: (outcome: string | null, note: string) => void; onAddToRefunds: () => void }) {
+function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; canEdit: boolean; onSave: (outcome: string | null, note: string, amount?: string | null) => void; onAddToRefunds: () => void }) {
   const c = data.conversation;
   const [note, setNote] = useState(c.outcome_note ?? "");
+  const savedAmount = enteredAmount(data);
+  const [amount, setAmount] = useState(savedAmount);
+  const isRefund = c.outcome === "refund" || c.outcome === "partial_refund";
   const sent = data.outbox.find((o) => o.state === "provider_accepted" || o.state === "confirmed");
   return (
     <section className="card">
@@ -702,9 +720,71 @@ function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; ca
           onChange={(e) => setNote(e.target.value)} onBlur={() => { if (note !== (c.outcome_note ?? "")) onSave(c.outcome, note); }}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
       )}
+      {isRefund && (
+        <label className="stack small refund-amount-field">Erstatteter Betrag in €
+          <input inputMode="decimal" placeholder="z. B. 12,50" value={amount} disabled={!canEdit}
+            onChange={(e) => setAmount(e.target.value)} onBlur={() => { if (amount.trim() !== savedAmount) onSave(c.outcome, note, amount.trim() || null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setAmount(savedAmount); }} />
+        </label>
+      )}
       {c.outcome_at && <p className="muted small">Erfasst {fmtDate(c.outcome_at)}</p>}
       <RefundListStatus status={data.refundList} canEdit={canEdit} onAdd={onAddToRefunds} />
     </section>
+  );
+}
+
+/** Amount a person entered for this case's refund, as "12,50" (empty when none). */
+function enteredAmount(data: CaseData): string {
+  const a = data.refundList?.item?.amount;
+  return a?.from === "entered" ? (a.cents / 100).toFixed(2).replace(".", ",") : "";
+}
+
+/** Header hint: what was refunded and whether it is ticked off in weclapp. */
+function RefundPill({ data }: { data: CaseData }) {
+  const outcome = data.conversation.outcome;
+  const list = data.refundList;
+  if (!list || list.state === "none") return null;
+  const a = list.item?.amount;
+  const what = outcome === "partial_refund" ? "Teilweise erstattet" : outcome === "refund" ? "Erstattet" : "Erstattung";
+  const sum = a ? ` ${formatAmount(a.cents, a.currency).replace(/\u00a0/g, " ")}` : "";
+  return list.state === "done"
+    ? <span className="pill ok" title="Auf der Erstattungsliste als in weclapp erledigt abgehakt">{what}{sum} · in weclapp erledigt</span>
+    : <span className="pill refund-open" title="Steht auf der Erstattungsliste, in weclapp noch nicht abgehakt">{what}{sum} · Erstattungsliste offen</span>;
+}
+
+const CLOSE_OUTCOMES = ["refund", "partial_refund", "replacement", "return", "none", "other"] as const;
+
+/** Asked when a case is set to "Erledigt": what was done, and for a refund the amount. */
+function CloseCase({ data, onClose, onCancel }: { data: CaseData; onClose: (outcome: string | undefined, note: string, amount?: string | null) => void; onCancel: () => void }) {
+  const c = data.conversation;
+  const [outcome, setOutcome] = useState(c.outcome ?? "");
+  const [note, setNote] = useState(c.outcome_note ?? "");
+  const [amount, setAmount] = useState(enteredAmount(data));
+  const isRefund = outcome === "refund" || outcome === "partial_refund";
+  return (
+    <form className="card close-case" onSubmit={(e) => { e.preventDefault(); onClose(outcome || undefined, note, isRefund ? amount.trim() || null : undefined); }}>
+      <h3>Fall erledigen</h3>
+      <p className="small muted">Was wurde gemacht? Bei einer Erstattung kommt der Fall mit Betrag auf die Erstattungsliste, dort wird abgehakt, wenn die Gutschrift in weclapp angelegt ist.</p>
+      <div className="row wrap" role="radiogroup" aria-label="Was wurde gemacht?">
+        {CLOSE_OUTCOMES.map((o) => (
+          <button type="button" key={o} className={outcome === o ? "chip active" : "chip"} aria-pressed={outcome === o} onClick={() => setOutcome(outcome === o ? "" : o)}>{OUTCOME_LABEL[o]}</button>
+        ))}
+      </div>
+      {isRefund && (
+        <div className="row wrap close-case-fields">
+          <label className="field"><span>Betrag in €</span><input inputMode="decimal" placeholder="z. B. 12,50" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus /></label>
+          <label className="field grow"><span>Vermerk</span><input placeholder="z. B. 25 % für fehlende Packung, keine Retoure" value={note} onChange={(e) => setNote(e.target.value)} /></label>
+        </div>
+      )}
+      {!isRefund && outcome && (
+        <label className="field close-case-fields"><span>Vermerk (optional)</span><input value={note} onChange={(e) => setNote(e.target.value)} /></label>
+      )}
+      <div className="row wrap actions">
+        <button className="primary" type="submit">{isRefund ? "Erledigt, auf die Erstattungsliste" : "Erledigt"}</button>
+        <button type="button" className="link" onClick={() => onClose(undefined, "")}>Ohne Angabe erledigen</button>
+        <button type="button" className="link" onClick={onCancel}>Abbrechen</button>
+      </div>
+    </form>
   );
 }
 

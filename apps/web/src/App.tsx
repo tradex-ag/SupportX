@@ -85,7 +85,9 @@ export function App() {
     const load = () => api<{ counts: { open: number } }>("GET", `/api/w/${workspaceId}/refunds?filter=open`).then((r) => { if (alive) setRefundsOpen(r.counts.open); }, () => {});
     void load();
     const timer = setInterval(load, 60_000);
-    return () => { alive = false; clearInterval(timer); };
+    // A case changed its outcome: update the count at once.
+    window.addEventListener("supportx-refunds", load);
+    return () => { alive = false; clearInterval(timer); window.removeEventListener("supportx-refunds", load); };
   }, [me, workspaceId]);
   const brand = { ...installBrand, productName: own.name ?? installBrand.productName, logoUrl: own.logoUrl ?? installBrand.logoUrl };
 

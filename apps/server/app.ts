@@ -261,7 +261,7 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     return snippetDraft(ctx, await actor(req), (req.params as { id: string }).id, body.snippetId);
   });
   app.post("/api/w/:ws/cases/:id/outcome", async (req) => {
-    const body = parse(z.object({ outcome: z.string().nullable(), note: z.string().max(2000).optional() }), req.body);
+    const body = parse(z.object({ outcome: z.string().nullable(), note: z.string().max(2000).optional(), amount: z.string().max(30).nullable().optional() }), req.body);
     await setOutcome(ctx, await actor(req), (req.params as { id: string }).id, body);
     return { ok: true };
   });
