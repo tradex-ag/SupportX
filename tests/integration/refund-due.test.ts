@@ -45,6 +45,13 @@ describe("Erstattung offen", () => {
     assert.equal(done.state, "done");
     assert.equal(done.signals[0]!.source, "notice");
     assert.equal((await row()).refund, "done");
+    // The exact return check: 1 of 1 shipped unit back (the sieve was never shipped), 24.90 € fit, the notice says 12.50 €.
+    const check = (await getCase(h.ctx, s.agent, conv.id)).returnCheck!;
+    assert.equal(check.applicable, true);
+    assert.deepEqual([check.receivedUnits, check.baseUnits, check.complete], [1, 1, true]);
+    assert.equal(check.amounts!.expected, 24.9);
+    assert.equal(check.amounts!.noticed, 12.5);
+    assert.ok(check.findings.some((f) => f.code === "credit_lower" && f.text.startsWith("Marktplatz-Erstattung 12,50 €")));
 
     // Without the notice, the outcome "Erstattet" on the case ends it too.
     await h.ctx.db.query("UPDATE conversations SET subject = 'Frage', order_references = '[]' WHERE workspace_id = $1 AND id = $2", [s.workspaceId, other.id]);

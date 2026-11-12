@@ -18,8 +18,9 @@ export const DEMO = {
   channels: { amazon: "GROSS2", docmorris: "GROSS3", shopify: "GROSS4", ebay: "GROSS5" },
 };
 
-const item = (id: string, pos: number, title: string, quantity: number, shipped: number, returned = 0) => ({
+const item = (id: string, pos: number, title: string, quantity: number, shipped: number, returned = 0, grossAmount?: string) => ({
   id, positionNumber: pos, title, articleId: `ART-${id}`, quantity: String(quantity), shippedQuantity: String(shipped), returnedQuantity: String(returned),
+  ...(grossAmount ? { grossAmount } : {}),
 });
 
 export function demoWeclappData(): FakeWeclappData {
@@ -28,12 +29,15 @@ export function demoWeclappData(): FakeWeclappData {
       {
         id: "so-amz-1", orderNumber: "AU-10001", orderNumberAtCustomer: "302-1234567-7654321", orderDate: day("2026-10-14"), status: "ORDER_CONFIRMATION_PRINTED",
         salesChannel: DEMO.channels.amazon, customerId: "cust-amz", tags: [],
-        orderItems: [item("soi-1", 1, "Demo-Teekanne Glas 1,2 l", 1, 1), item("soi-2", 2, "Demo-Teesieb Edelstahl", 2, 0)],
+        orderItems: [item("soi-1", 1, "Demo-Teekanne Glas 1,2 l", 1, 1, 0, "24.90"), item("soi-2", 2, "Demo-Teesieb Edelstahl", 2, 0, 0, "9.90")],
+        grossAmount: "34.80", recordCurrencyId: "cur-eur", shippingCostItems: [],
       },
       {
         id: "so-dm-1", orderNumber: "AU-10002", orderNumberAtCustomer: "DM-2026-000123", orderDate: day("2026-10-12"), status: "CLOSED",
         salesChannel: DEMO.channels.docmorris, customerId: "cust-dm", tags: [],
-        orderItems: [item("soi-3", 1, "Demo-Pflegecreme 50 ml", 2, 2, 1)],
+        // Amounts as weclapp sends them (decimal strings, gross incl. VAT): 2 × 12.90 + 4.90 shipping. One of two came back.
+        orderItems: [item("soi-3", 1, "Demo-Pflegecreme 50 ml", 2, 2, 1, "25.80")],
+        grossAmount: "30.70", recordCurrencyId: "cur-eur", shippingCostItems: [{ id: "sci-1", articleId: "ART-SHIP", grossAmount: "4.90" }],
       },
       {
         id: "so-shop-1", orderNumber: "AU-10003", orderNumberAtCustomer: "1001", orderDate: day("2026-10-15"), status: "ORDER_CONFIRMATION_PRINTED",
@@ -126,6 +130,7 @@ export function demoWeclappData(): FakeWeclappData {
       { id: "ig-3", incomingGoodsNumber: "WE-7003", incomingGoodsType: "STANDARD", status: "INCOMING_MOVED_INTO_STORE", salesOrders: [{ id: "so-amz-1" }], incomingGoodsItems: [] },
     ],
     shipmentReturnReason: [{ id: "rr-1", name: "Ware beschädigt" }],
+    currency: [{ id: "cur-eur", name: "EUR", currencySymbol: "€" }],
     salesInvoice: [
       { id: "inv-1", invoiceNumber: "RE-9001", invoiceDate: day("2026-10-15"), status: "OPEN_ITEM_CREATED", paymentStatus: "PAID", salesInvoiceType: "STANDARD_INVOICE", salesOrderId: "so-amz-1", salesOrders: [{ id: "so-amz-1" }] },
       { id: "inv-2", invoiceNumber: "RE-9002", invoiceDate: day("2026-10-13"), status: "OPEN_ITEM_CREATED", paymentStatus: "PAID", salesOrderId: "so-dm-1" },

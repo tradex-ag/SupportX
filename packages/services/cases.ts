@@ -16,8 +16,9 @@ import type { ChannelKind } from "./connections.ts";
 import type { OrderRecord } from "../core/contracts.ts";
 import { deadlineState, MAX_DEADLINE_HOURS, normalizeDeadlines } from "../core/deadline.ts";
 import { TOPICS } from "../core/topic.ts";
-import { refundDue, type RefundDue, type RelatedRefundCase } from "../core/refund-due.ts";
+import { isRefundNotice, refundDue, type RefundDue, type RelatedRefundCase } from "../core/refund-due.ts";
 import { returnSummary, type ReturnOrderInput } from "../core/returns.ts";
+import { refundNoticeAmount, returnCheck, type RefundNoticeAmount, type ReturnCheck } from "../core/return-check.ts";
 
 export type CaseFilter = "open" | "needs_attention" | "waiting" | "closed" | "info" | "all";
 
@@ -138,12 +139,22 @@ async function relatedRefundCases(ctx: AppContext, ws: string, conversationId: s
   );
 }
 
-/** Refund hint for the case view, see core/refund-due.ts. */
-async function refundDueFor(ctx: AppContext, ws: string, conversationId: string, conv: { outcome: string | null; subject: string | null }, link: { status: string; external_order_id?: string | null; snapshot: OrderRecord | null } | null): Promise<RefundDue> {
+/**
+ * Refund hint and exact return check for the case view, see core/refund-due.ts
+ * and core/return-check.ts. Refund amounts come from marketplace notices about
+ * the same order (this case or related ones).
+ */
+async function refundDueFor(ctx: AppContext, ws: string, conversationId: string, conv: { outcome: string | null; subject: string | null }, link: { status: string; external_order_id?: string | null; snapshot: OrderRecord | null } | null): Promise<{ refund: RefundDue; returnCheck: ReturnCheck | null }> {
   const order = link?.status === "unique" ? link.snapshot : null;
-  if (!order || returnSummary(order).state !== "received") return refundDue({ order: null });
+  if (!order) return { refund: refundDue({ order: null }), returnCheck: null };
+  const check = returnCheck(order);
+  if (returnSummary(order).state !== "received" && !check.applicable) return { refund: refundDue({ order: null }), returnCheck: null };
   const related = await relatedRefundCases(ctx, ws, conversationId, link?.external_order_id ?? null, [order.orderNumber, order.orderNumberAtCustomer]);
-  return refundDue({ order, outcome: conv.outcome, subject: conv.subject, related });
+  const notices = [conv.subject, ...related.map((r) => r.subject)]
+    .filter((subject): subject is string => isRefundNotice(subject))
+    .map(refundNoticeAmount)
+    .filter((n): n is RefundNoticeAmount => !!n);
+  return { refund: refundDue({ order, outcome: conv.outcome, subject: conv.subject, related }), returnCheck: returnCheck(order, notices) };
 }
 
 export async function getCase(ctx: AppContext, actor: Actor, conversationId: string) {
@@ -217,8 +228,8 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const invoices = invoiceSummary(link?.status === "unique" ? link.snapshot : null);
   const forwards = await caseForwards(ctx, ws, conversationId);
   const [listingActions, amazonListings] = await Promise.all([listCaseListingActions(ctx.db, ws, conversationId), caseAmazonListingAccess(ctx.db, ws)]);
-  const refund = await refundDueFor(ctx, ws, conversationId, conversation as { outcome: string | null; subject: string | null }, orderLink as { status: string; external_order_id: string | null; snapshot: OrderRecord | null } | null);
-  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund };
+  const { refund, returnCheck: returnCheckResult } = await refundDueFor(ctx, ws, conversationId, conversation as { outcome: string | null; subject: string | null }, orderLink as { status: string; external_order_id: string | null; snapshot: OrderRecord | null } | null);
+  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund, returnCheck: returnCheckResult };
 }
 
 /**

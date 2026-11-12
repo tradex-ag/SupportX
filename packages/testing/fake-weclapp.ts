@@ -15,6 +15,7 @@ export interface FakeWeclappData {
   /** Goods receipts; customer returns have incomingGoodsType CUSTOMER_RETURN. */
   incomingGoods?: Array<Record<string, unknown>>;
   shipmentReturnReason?: Array<Record<string, unknown>>;
+  currency?: Array<Record<string, unknown>>;
 }
 
 export interface FakeWeclapp {
@@ -59,7 +60,7 @@ export async function startFakeWeclapp(data: FakeWeclappData, opts: { token: str
       res.writeHead(200, { "Content-Type": "application/pdf" });
       return res.end(Buffer.from(`%PDF-1.4\n% Rechnung ${String(inv.invoiceNumber)}\n%%EOF`));
     }
-    const match = /^\/webapp\/api\/v2\/(salesOrder|shipment|salesInvoice|article|incomingGoods|shipmentReturnReason)$/.exec(url.pathname);
+    const match = /^\/webapp\/api\/v2\/(salesOrder|shipment|salesInvoice|article|incomingGoods|shipmentReturnReason|currency)$/.exec(url.pathname);
     if (!match) return send(404, { error: "not found" });
     // A user without the right for this resource (e.g. no access to goods receipts).
     if (opts.forbidden?.includes(match[1]!)) return send(403, { error: "forbidden" });
