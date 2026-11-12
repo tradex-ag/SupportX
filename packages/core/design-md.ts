@@ -124,18 +124,33 @@ export function readDesignMd(text: string): DesignReading {
 
   let heading = "";
   let radiusWindow = 0;
+  // CSS tokens named in the file (`--go` → #3a6b35), so `var(--go)` elsewhere resolves.
+  const tokens = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const m = /(--[\w-]+)[^#\n]*?(#(?:[0-9a-f]{6}|[0-9a-f]{3})\b)/i.exec(line);
+    if (m && !tokens.has(m[1]!.toLowerCase())) tokens.set(m[1]!.toLowerCase(), expand(m[2]!));
+  }
   for (const line of text.split(/\r?\n/)) {
     const lower = line.toLowerCase();
     if (/^#{1,6}\s/.test(line)) heading = lower;
-    const hex = /#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/i.exec(line);
-    // Status colours and colours for dark surfaces are not part of the base look.
-    const skip = /danger|error|fehler|success|erfolg|warning|warnung|auf ink|on ink|on dark|dunkel|dark mode/.test(lower);
-    if (hex && !skip) {
+    // First colour on the line: a hex value or a var(--token) defined elsewhere in the file.
+    const refs = [...lower.matchAll(/#(?:[0-9a-f]{6}|[0-9a-f]{3})\b|var\((--[\w-]+)\)/g)]
+      .map((m) => ({ index: m.index!, length: m[0].length, value: m[1] ? tokens.get(m[1]) : expand(m[0]) }))
+      .filter((r) => r.value);
+    const ref = refs[0];
+    if (ref) {
       // The token or name before the colour decides first (e.g. `--muted`), then the description after it.
-      const before = lower.slice(0, hex.index);
-      const after = lower.slice(hex.index + hex[0].length);
-      const rule = RULES.find(([f, re]) => !raw.colors[f] && re.test(before)) ?? RULES.find(([f, re]) => !raw.colors[f] && re.test(after));
-      if (rule) raw.colors[rule[0]] = expand(hex[0]);
+      const before = lower.slice(0, ref.index);
+      const after = lower.slice(ref.index + ref.length);
+      // Status colours, dark surfaces and the navigation are not part of the base look.
+      const skip = /danger|error|fehler|success|erfolg|warning|warnung|navigation|sidebar|seitenleiste|nav-/.test(before) || /auf ink|on ink|on dark|dunkel|dark mode/.test(lower);
+      // The role named first wins (a row "Text | --text → --muted" is the text colour).
+      const pick = (part: string) => RULES
+        .map(([f, re]) => ({ f, at: raw.colors[f] ? -1 : part.search(re) }))
+        .filter((c) => c.at >= 0)
+        .sort((a, b) => a.at - b.at)[0]?.f;
+      const field = skip ? undefined : pick(before) ?? pick(after);
+      if (field) raw.colors[field] = ref.value!;
     }
     // Fonts: bold names in a typography context (each judged by the words just before it),
     // otherwise an explicit "font-family: …" / "Schrift: …".
@@ -146,13 +161,19 @@ export function readDesignMd(text: string): DesignReading {
       if (mono) raw.fonts.mono ??= cleanFamily(name, "ui-monospace, monospace");
       else raw.fonts.sans ??= cleanFamily(name, "Arial, sans-serif");
     };
-    if (bolds.length > 0) {
+    // Font tables in a typography section: "| Inter | `--font-body` | Fließtext |".
+    const row = /schrift|typo|font/.test(heading) ? /^\|\s*([A-Z][\w -]{1,40}?)\s*\|(.*)$/.exec(line) : null;
+    if (row && !/^(familie|family|schrift|font|name|token)$/i.test(row[1]!.trim())) {
+      const rest = row[2]!.toLowerCase();
+      if (/mono|code/.test(rest) || /mono/i.test(row[1]!)) takeFont(row[1]!, true);
+      else if (/body|text|fließtext|sans|\bui\b/.test(rest)) takeFont(row[1]!, false);
+    } else if (bolds.length > 0) {
       for (const b of bolds) takeFont(b[1]!, /mono/i.test(b[1]!) || /mono|code/.test(lower.slice(Math.max(0, b.index! - 24), b.index)));
     } else if (explicit) {
       takeFont(explicit, /mono|code/.test(lower) || /mono/i.test(explicit));
     }
     // Radius: on the line that names it or in the few lines right after.
-    if (/radius|ecken|rundung|corner|rounded/.test(lower)) radiusWindow = 4;
+    if (/radius|radien|radii|ecken|rundung|corner|rounded/.test(lower)) radiusWindow = 4;
     if (raw.radius === undefined && radiusWindow > 0) {
       const px = /(\d+(?:\.\d+)?)\s*px/.exec(lower)?.[1];
       if (px) raw.radius = Math.min(24, Math.max(0, Number(px)));

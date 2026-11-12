@@ -119,3 +119,51 @@ rounded:
     assert.equal(logoType(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')), null);
   });
 });
+
+describe("style guides with token tables", () => {
+  it("reads roles from the first column, resolves var(--token), skips status and navigation rows, reads font tables and Radien", () => {
+    const r = readDesignMd(`# Shop – Style Guide
+
+## Farben
+
+| Rolle | Token | Wert | Einsatz |
+|---|---|---|---|
+| Seite | \`--bg\` | \`#fafaf8\` | Hintergrund |
+| Karte | \`--panel\` | \`#ffffff\` | Karten, Dialoge |
+| Linie | \`--hairline\` | \`#e7e8e3\` | Rahmen |
+| Text | \`--text\` → \`--muted\` → \`--faint\` | \`#1a1d1a\` … \`#9ca199\` | absteigende Wichtigkeit |
+| Akzent | \`--go\`, \`--go-tint\` | \`#2d5b8a\` | Primärknopf, Links, Erfolg |
+| Warnung | \`--live\` | \`#b8841f\` | Hinweis |
+| Fehler | \`--danger\` | \`#c5544a\` | Fehler |
+| Navigation | \`--nav-*\` | \`--nav-bg: #14301f\` | nur Seitenleiste |
+
+## Typografie
+
+| Familie | Token | Einsatz |
+|---|---|---|
+| Space Grotesk | \`--font-display\` | Seitentitel |
+| Inter | \`--font-body\` | Fließtext, UI (Basis 15px) |
+| JetBrains Mono | \`--font-mono\` | Zahlen, SKUs |
+
+## Form
+
+- Radien: \`--r-sm\` 8px (Knöpfe), \`--r-md\` 12px (Karten)
+
+## Komponenten
+
+- **Primärknopf:** \`background: var(--go)\`, Text \`#fff\`
+`);
+    assert.equal(r.theme.colors.background, "#fafaf8");
+    assert.equal(r.theme.colors.surface, "#ffffff");
+    assert.equal(r.theme.colors.line, "#e7e8e3");
+    assert.equal(r.theme.colors.text, "#1a1d1a", "the role column wins over later token names");
+    assert.equal(r.theme.colors.accent, "#2d5b8a", "an accent row is not skipped because its description says Erfolg");
+    assert.equal(r.theme.colors.primary, "#2d5b8a", "var(--go) resolves to the token value");
+    assert.equal(r.theme.colors.primaryText, "#ffffff");
+    assert.equal(r.theme.colors.muted, undefined);
+    assert.ok(!Object.values(r.theme.colors).includes("#14301f"), "navigation colour is not the page background");
+    assert.match(r.theme.fonts.sans ?? "", /^"Inter"/);
+    assert.match(r.theme.fonts.mono ?? "", /JetBrains Mono/);
+    assert.equal(r.theme.radius, 8);
+  });
+});
