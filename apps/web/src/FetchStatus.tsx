@@ -53,7 +53,7 @@ export function FetchStatus({ workspaceId, canFetch, onFetched }: { workspaceId:
         <div key={s.id} className="row">
           {s.fetching ? <span className="muted">{s.displayName}: wird gerade abgerufen …</span>
             : s.stale ? <span className="deadline bad" title="Neue Nachrichten von hier fehlen womöglich im Posteingang."><i aria-hidden="true" />{s.displayName} {s.lastSyncAt ? `seit ${sinceLabel(s.lastSyncAt).replace(/^vor /, "")} nicht abgerufen` : "noch nie abgerufen"}</span>
-            : <span className="muted" title="Mirakl erlaubt den Abruf, solange der Posteingang offen ist. Rund um die Uhr erst nach Freigabe durch den Marktplatz.">{s.displayName}: abgerufen {sinceLabel(s.lastSyncAt)}</span>}
+            : <span className="muted" title="Wird automatisch abgerufen, sobald SupportX geöffnet wird, und danach alle 10 Min., solange der Posteingang offen ist. Rund um die Uhr erst nach Freigabe durch den Marktplatz.">{s.displayName}: abgerufen {sinceLabel(s.lastSyncAt)} · automatisch beim Öffnen</span>}
           {canFetch && !s.fetching && <button className="link" disabled={busy === s.id} onClick={() => void fetchNow(s.id)}>Jetzt abrufen</button>}
         </div>
       ))}

@@ -309,7 +309,7 @@ function MiraklFetchMode({ c, owner, base, act }: { c: Connection; owner: boolea
   }
   return (
     <div className="notice small">
-      Shop Apotheke wird abgerufen, solange der Posteingang offen ist (höchstens alle 10 Min.), so wie Mirakl es vorsieht. Rund um die Uhr erst, wenn Shop Apotheke das erlaubt.
+      Shop Apotheke wird automatisch abgerufen, sobald jemand SupportX öffnet, und danach alle 10 Min., solange der Posteingang offen ist. So sieht es Mirakl vor. Rund um die Uhr erst, wenn Shop Apotheke das erlaubt.
       {owner && !open && <> <button className="link" onClick={() => setOpen(true)}>Freigabe eintragen</button></>}
       {owner && open && (
         <form className="stack" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `${base}/connections/${c.id}/mirakl-background-sync`, { allowed: true, evidenceNote: note }), () => `Automatischer Abruf an, alle ${minutes} Min.`).then(() => { setOpen(false); setNote(""); }); }}>
@@ -547,7 +547,7 @@ function MiraklForm({ onSubmit, onCancel }: { onSubmit: (body: unknown) => void;
   return (
     <form className="stack inset" onSubmit={(e) => { e.preventDefault(); onSubmit({ ...form, apiKey: form.apiKey.trim(), shopId: form.shopId.trim() || undefined });  }}>
       <h4>Shop Apotheke verbinden</h4>
-      <p className="muted small">Shop Apotheke läuft auf Mirakl. Adresse und API-Schlüssel stehen im Mirakl-Backoffice oben rechts unter dem Benutzer → API-Schlüssel. Gelesen wird, solange der Posteingang offen ist, und per Klick auf „Jetzt abrufen“.</p>
+      <p className="muted small">Shop Apotheke läuft auf Mirakl. Adresse und API-Schlüssel stehen im Mirakl-Backoffice oben rechts unter dem Benutzer → API-Schlüssel. Gelesen wird automatisch beim Öffnen von SupportX, danach alle 10 Min., solange der Posteingang offen ist, und per Klick auf „Jetzt abrufen“.</p>
       <label>Name<input value={form.displayName} onChange={set("displayName")} required /></label>
       <label>Adresse der Instanz<input placeholder="https://….mirakl.net" value={form.baseUrl} onChange={set("baseUrl")} required /></label>
       <HiddenField label="API-Schlüssel" value={form.apiKey} onChange={(v) => setForm({ ...form, apiKey: v })} />
