@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "./api.ts";
+import { api, ApiError, ROLE_LABEL } from "./api.ts";
 import { Inbox } from "./Inbox.tsx";
 import { Refunds } from "./Refunds.tsx";
 import { Report } from "./Report.tsx";
@@ -146,7 +146,7 @@ export function App() {
           {me.sendMode === "enabled" ? "Versand möglich (je Verbindung)" : "Nur Entwürfe"}
         </span>
         <span className="spacer" />
-        <span className="muted">{me.user.display_name} · {workspace?.role}</span>
+        <span className="muted">{me.user.display_name}{workspace ? ` · ${ROLE_LABEL[workspace.role]}` : ""}</span>
         <button className="link" onClick={async () => { await api("POST", "/api/logout"); setMe(null); }}>Abmelden</button>
       </header>
       {oauthNotice && <p className="notice" role="status">{oauthNotice} <button className="link" onClick={() => setOauthNotice(null)}>schließen</button></p>}

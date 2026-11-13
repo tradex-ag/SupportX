@@ -55,3 +55,11 @@ export const OUTBOX_LABEL: Record<string, string> = {
 export const DRAFT_LABEL: Record<string, string> = {
   proposed: "Vorschlag", edited: "bearbeitet", superseded: "veraltet", sent: "gesendet", discarded: "verworfen",
 };
+
+/** What each role may do, in the words the team page and the header use. */
+export const ROLE_LABEL: Record<"owner" | "agent" | "viewer", string> = { owner: "Inhaber", agent: "Bearbeiter", viewer: "Nur lesen" };
+export const ROLE_HINT: Record<"owner" | "agent" | "viewer", string> = {
+  owner: "alles, auch Einstellungen, Zugangsdaten und Team",
+  agent: "Fälle bearbeiten, antworten, Erstattungen abhaken",
+  viewer: "alles sehen, nichts ändern",
+};
