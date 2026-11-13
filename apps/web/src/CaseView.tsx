@@ -1332,7 +1332,7 @@ function CategoryBar({ category, reason, sender, subject, base, canEdit, onSet }
   ) : (
     <div className="row wrap">
       <button onClick={() => { close(); onSet(target, "none"); }}>Nur diese Mail</button>
-      {subject.trim() && <button onClick={() => setAsking("subject")} title="Alle Mails, deren Betreff bis auf Beträge und Nummern gleich ist">Alle mit diesem Betreff-Muster …</button>}
+      {subject.trim() && <SubjectPatternButton subject={subject} target={target} base={base} onClick={() => setAsking("subject")} />}
       {sender && <button onClick={() => { close(); onSet(target, "address"); }}>Alle von {sender}</button>}
       {domain && <button onClick={() => { close(); onSet(target, "domain"); }}>Alle von @{domain}</button>}
       <button className="link" onClick={close}>Abbrechen</button>
@@ -1351,6 +1351,26 @@ function CategoryBar({ category, reason, sender, subject, base, canEdit, onSet }
     <div className={`notice info-bar${asking === "subject" ? " wide" : ""}`}><div className="small">Als Werbung/Info einordnen, ohne Antwort:</div>{choices}</div>
   ) : (
     <button className="ghost" onClick={() => setAsking("choose")} title="Als Werbung oder Info einordnen, ohne Antwort">Keine Kundenanfrage</button>
+  );
+}
+
+/** Shows the proposed pattern itself and how many cases it would catch, so a person can judge it before opening the editor. */
+function SubjectPatternButton({ subject, target, base, onClick }: { subject: string; target: "support" | "info"; base: string; onClick: () => void }) {
+  const pattern = subjectPattern(subject);
+  const [preview, setPreview] = useState<PatternPreview | null>(null);
+  useEffect(() => {
+    let stale = false;
+    api<PatternPreview>("POST", `${base}/category-rules/preview`, { pattern, category: target })
+      .then((p) => { if (!stale) setPreview(p); })
+      .catch(() => undefined);
+    return () => { stale = true; };
+  }, [base, pattern, target]);
+  const count = preview?.valid ? `${preview.matching} ${preview.matching === 1 ? "Fall" : "Fälle"}` : preview ? "zu allgemein, bitte anpassen" : "…";
+  return (
+    <button className="pattern-choice" onClick={onClick} title="Muster ansehen, anpassen und speichern">
+      <span>Alle mit diesem Betreff-Muster ({count})</span>
+      <code>{pattern}</code>
+    </button>
   );
 }
 
