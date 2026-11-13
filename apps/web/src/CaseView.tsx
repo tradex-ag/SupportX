@@ -38,6 +38,9 @@ interface OrderSnapshot {
   returns?: ReturnFact[];
   returnsError?: string;
   weightsRead?: boolean;
+  /** Order total incl. VAT and shipping (weclapp salesOrder.grossAmount). */
+  grossAmount?: number;
+  currency?: string;
   retrievedAt: string;
 }
 
@@ -710,6 +713,8 @@ function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; ca
   // Note and amount are saved together with the button (or Enter), not on leaving a field.
   const dirty = note !== savedNote || (isRefund && amount.trim() !== savedAmount);
   const sent = data.outbox.find((o) => o.state === "provider_accepted" || o.state === "confirmed");
+  const full = fullAmount(data);
+  const isFull = c.outcome === "refund" && full !== null && savedAmount === full.text;
   return (
     <section className="card">
       <h3>Ergebnis</h3>
@@ -721,6 +726,12 @@ function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; ca
           {Object.entries(OUTCOME_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </label>
+      {canEdit && (!c.outcome || isRefund || c.outcome === "return") && (
+        full ? (
+          isFull ? <p className="small ok-text">Voller Betrag erstattet: {full.label} (Bestellsumme laut weclapp).</p>
+            : <button type="button" className="small full-refund" onClick={() => onSave("refund", note, full.text)} title="Setzt „Erstattet“ mit der ganzen Bestellsumme laut weclapp (inkl. Versand) und speichert.">Voller Betrag erstattet ({full.label})</button>
+        ) : data.orderLink?.status === "unique" ? <p className="small muted">Bestellsumme noch nicht abgerufen: „Neu aus weclapp abrufen“ holt sie, dann gibt es hier „Voller Betrag erstattet“.</p> : null
+      )}
       {c.outcome && (
         <form className="outcome-details" onSubmit={(e) => { e.preventDefault(); if (dirty) onSave(c.outcome, note, isRefund ? amount.trim() || null : undefined); }}>
           {isRefund && (
@@ -745,6 +756,14 @@ function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; ca
       <RefundListStatus status={data.refundList} canEdit={canEdit} onAdd={onAddToRefunds} />
     </section>
   );
+}
+
+/** Order total from weclapp for "Voller Betrag erstattet": "24,24" for the field, "24,24 €" to show. */
+function fullAmount(data: CaseData): { text: string; label: string } | null {
+  const order = data.orderLink?.status === "unique" ? data.orderLink.snapshot : null;
+  const total = order?.grossAmount;
+  if (typeof total !== "number" || !(total > 0)) return null;
+  return { text: total.toFixed(2).replace(".", ","), label: formatMoney(total, order?.currency) };
 }
 
 /** Amount a person entered for this case's refund, as "12,50" (empty when none). */
@@ -775,6 +794,7 @@ function CloseCase({ data, onClose, onCancel }: { data: CaseData; onClose: (outc
   const [note, setNote] = useState(c.outcome_note ?? "");
   const [amount, setAmount] = useState(enteredAmount(data));
   const isRefund = outcome === "refund" || outcome === "partial_refund";
+  const full = fullAmount(data);
   return (
     <form className="card close-case" onSubmit={(e) => { e.preventDefault(); onClose(outcome || undefined, note, isRefund ? amount.trim() || null : undefined); }}>
       <h3>Fall erledigen</h3>
@@ -787,6 +807,7 @@ function CloseCase({ data, onClose, onCancel }: { data: CaseData; onClose: (outc
       {isRefund && (
         <div className="row wrap close-case-fields">
           <label className="field"><span>Betrag in €</span><input inputMode="decimal" placeholder="z. B. 12,50" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus /></label>
+          {full && <button type="button" className="small" onClick={() => { setOutcome("refund"); setAmount(full.text); }}>Voller Betrag ({full.label})</button>}
           <label className="field grow"><span>Vermerk</span><input placeholder="z. B. 25 % für fehlende Packung, keine Retoure" value={note} onChange={(e) => setNote(e.target.value)} /></label>
         </div>
       )}
