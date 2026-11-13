@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, fmtDate, PLATFORM_LABEL } from "./api.ts";
+import { weclappOrderHref } from "./order-links.ts";
 import { formatAmount, type RefundListItem } from "../../../packages/core/refund-list.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -9,6 +10,8 @@ const SOURCE_LABEL: Record<string, string> = { outcome: "Ergebnis im Fall", noti
 const KIND_LABEL: Record<RefundListItem["kind"], string> = { full: "Erstattet", partial: "Teilweise erstattet", unknown: "Erstattung gemeldet" };
 
 const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }) : "–");
+/** Amount for the input, "12,50": typed in, otherwise read from the marketplace notice. */
+const fieldAmount = (item: RefundListItem) => (item.amount ? (item.amount.cents / 100).toFixed(2).replace(".", ",") : "");
 const amountText = (a: RefundListItem["amount"]) => (a ? formatAmount(a.cents, a.currency).replace(/ /g, " ") : "");
 
 /**
@@ -20,6 +23,7 @@ export function Refunds({ workspaceId, role, onOpenCase, onCounts }: { workspace
   const [filter, setFilter] = useState<Filter>("open");
   const [items, setItems] = useState<RefundListItem[] | null>(null);
   const [counts, setCounts] = useState<{ open: number; done: number } | null>(null);
+  const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const base = `/api/w/${workspaceId}`;
@@ -27,8 +31,9 @@ export function Refunds({ workspaceId, role, onOpenCase, onCounts }: { workspace
 
   const load = useCallback(async () => {
     try {
-      const data = await api<{ items: RefundListItem[]; counts: { open: number; done: number } }>("GET", `${base}/refunds?filter=${filter}`);
+      const data = await api<{ items: RefundListItem[]; counts: { open: number; done: number }; erpBaseUrl: string | null }>("GET", `${base}/refunds?filter=${filter}`);
       setItems(data.items);
+      setErpBaseUrl(data.erpBaseUrl);
       setCounts(data.counts);
       onCounts?.(data.counts.open);
       setError(null);
@@ -76,8 +81,11 @@ export function Refunds({ workspaceId, role, onOpenCase, onCounts }: { workspace
         <p className="muted wide">{filter === "open" ? "Keine offenen Erstattungen." : filter === "done" ? "Noch nichts abgehakt." : "Noch keine Erstattungen."}</p>
       ) : (
         <ul className="refund-list wide">
-          {items.map((item) => <RefundRow key={item.key} item={item} canEdit={canEdit} busy={busy === item.key} onOpenCase={onOpenCase}
-            onDone={(done, creditNoteNumber) => act(item.key, () => api("POST", `${base}/refunds/done`, { conversationIds: item.conversationIds, done, creditNoteNumber }))}
+          {items.map((item) => <RefundRow key={item.key} item={item} weclappHref={weclappOrderHref(erpBaseUrl, item.externalOrderId)} canEdit={canEdit} busy={busy === item.key} onOpenCase={onOpenCase}
+            onDone={(done, creditNoteNumber, amount) => act(item.key, async () => {
+              if (amount) await api("POST", `${base}/refunds/details`, { conversationIds: item.conversationIds, amount });
+              await api("POST", `${base}/refunds/done`, { conversationIds: item.conversationIds, done, creditNoteNumber });
+            })}
             onDetails={(body) => act(item.key, () => api("POST", `${base}/refunds/details`, { conversationIds: item.conversationIds, ...body }))}
             onRemove={() => act(item.key, () => api("POST", `${base}/refunds/remove`, { conversationIds: item.conversationIds }))} />)}
         </ul>
@@ -86,23 +94,25 @@ export function Refunds({ workspaceId, role, onOpenCase, onCounts }: { workspace
   );
 }
 
-function RefundRow({ item, canEdit, busy, onOpenCase, onDone, onDetails, onRemove }: {
-  item: RefundListItem; canEdit: boolean; busy: boolean; onOpenCase: (id: string) => void;
-  onDone: (done: boolean, creditNoteNumber: string | null) => void;
+function RefundRow({ item, weclappHref, canEdit, busy, onOpenCase, onDone, onDetails, onRemove }: {
+  item: RefundListItem; weclappHref: string | null; canEdit: boolean; busy: boolean; onOpenCase: (id: string) => void;
+  onDone: (done: boolean, creditNoteNumber: string | null, amount?: string) => void;
   onDetails: (body: { amount?: string | null; creditNoteNumber?: string | null }) => void;
   onRemove: () => void;
 }) {
-  const [amount, setAmount] = useState(item.amount?.from === "entered" ? amountText(item.amount).replace(/\s*[^\d,.]+$/, "") : "");
+  const [amount, setAmount] = useState(fieldAmount(item));
   const [creditNote, setCreditNote] = useState(item.done?.creditNoteNumber ?? "");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const done = !!item.done;
-  const savedAmount = item.amount?.from === "entered" ? amountText(item.amount).replace(/\s*[^\d,.]+$/, "") : "";
+  const savedAmount = fieldAmount(item);
   const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setAmount(savedAmount); (e.target as HTMLInputElement).blur(); } };
   const id = `refund-${item.key}`;
+  // Ticking off stores the amount shown, so the done entry keeps it even when it came from the notice.
+  const keepAmount = () => (amount.trim() && (item.amount?.from !== "entered" || amount.trim() !== savedAmount) ? amount.trim() : undefined);
   return (
     <li className={done ? "refund-row done" : "refund-row"}>
       <label className="refund-tick" htmlFor={id} title={done ? "Abhaken zurücknehmen" : "In weclapp erledigt"}>
-        <input id={id} type="checkbox" checked={done} disabled={!canEdit || busy} onChange={(e) => onDone(e.target.checked, creditNote.trim() || null)} />
+        <input id={id} type="checkbox" checked={done} disabled={!canEdit || busy} onChange={(e) => onDone(e.target.checked, creditNote.trim() || null, e.target.checked ? keepAmount() : undefined)} />
         <span className="sr-only">{done ? "Erledigt, zurücknehmen" : "In weclapp erledigt"}</span>
       </label>
       <div className="refund-order">
@@ -112,6 +122,7 @@ function RefundRow({ item, canEdit, busy, onOpenCase, onDone, onDetails, onRemov
           {item.orderNumber && item.marketplaceOrderNumber ? ` · ${item.marketplaceOrderNumber}` : ""}
         </div>
         {item.customer && <div className="small ellipsis">{item.customer}</div>}
+        {weclappHref && <a className="button small weclapp-link" href={weclappHref} target="_blank" rel="noopener noreferrer">Auftrag in weclapp ↗</a>}
       </div>
       <div className="refund-items small">
         <div className="refund-kind">{KIND_LABEL[item.kind]}</div>
@@ -133,7 +144,7 @@ function RefundRow({ item, canEdit, busy, onOpenCase, onDone, onDetails, onRemov
               onBlur={() => { if (amount.trim() !== savedAmount) onDetails({ amount: amount.trim() || null }); }} />
           </label>
         ) : <div className="refund-sum">{amountText(item.amount) || "–"}</div>}
-        {item.amount?.from === "notice" && <div className="small muted">{done ? "laut" : `${amountText(item.amount)} laut`} Meldung</div>}
+        {item.amount?.from === "notice" && <div className="small muted">laut Meldung des Marktplatzes</div>}
         {item.creditNotes.length > 0 && !done && <div className="small warn-text" title="In der zuletzt abgerufenen Bestellung steht schon eine Gutschrift. Vielleicht ist das schon erledigt.">In weclapp: Gutschrift {item.creditNotes.join(", ")}</div>}
       </div>
       <div className="refund-state small">
@@ -146,7 +157,7 @@ function RefundRow({ item, canEdit, busy, onOpenCase, onDone, onDetails, onRemov
           <label className="field">
             <span>Gutschrift-Nr. (optional)</span>
             <input value={creditNote} placeholder="aus weclapp" disabled={busy} onChange={(e) => setCreditNote(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") onDone(true, creditNote.trim() || null); }} />
+              onKeyDown={(e) => { if (e.key === "Enter") onDone(true, creditNote.trim() || null, keepAmount()); }} />
           </label>
         ) : <div className="muted">offen seit {fmtDay(item.since)}</div>}
         {!done && canEdit && <div className="muted">offen seit {fmtDay(item.since)}</div>}

@@ -37,13 +37,17 @@ function origin(url: string | null | undefined): string | null {
   }
 }
 
+/** Link to a sales order in weclapp, or null without a tenant address or a numeric order id. */
+export function weclappOrderHref(erpBaseUrl: string | null | undefined, orderId: string | null | undefined): string | null {
+  const weclapp = origin(erpBaseUrl);
+  return weclapp && WECLAPP_ORDER_PATH && orderId && /^\d{1,20}$/.test(orderId) ? weclapp + WECLAPP_ORDER_PATH.replace("{id}", orderId) : null;
+}
+
 export function orderLinks(input: OrderLinkInput): OrderLink[] {
   const links: OrderLink[] = [];
   const { order } = input;
-  const weclapp = origin(input.erpBaseUrl);
-  if (weclapp && WECLAPP_ORDER_PATH && /^\d{1,20}$/.test(order.id)) {
-    links.push({ label: "Auftrag in weclapp", href: weclapp + WECLAPP_ORDER_PATH.replace("{id}", order.id) });
-  }
+  const weclappHref = weclappOrderHref(input.erpBaseUrl, order.id);
+  if (weclappHref) links.push({ label: "Auftrag in weclapp", href: weclappHref });
   const numbers = [order.orderNumberAtCustomer, order.orderNumber].map((n) => n?.trim()).filter((n): n is string => !!n);
   const platforms = new Set(input.platforms.filter(Boolean));
   const amazon = numbers.find((n) => AMAZON_ORDER.test(n));

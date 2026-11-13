@@ -78,11 +78,13 @@ async function candidates(db: Queryable, ws: string): Promise<RefundCandidate[]>
   }));
 }
 
-export async function listRefunds(ctx: AppContext, actor: Actor, filter: RefundFilter): Promise<{ items: RefundListItem[]; counts: { open: number; done: number } }> {
+export async function listRefunds(ctx: AppContext, actor: Actor, filter: RefundFilter): Promise<{ items: RefundListItem[]; counts: { open: number; done: number }; erpBaseUrl: string | null }> {
   const all = groupRefunds(await candidates(ctx.db, actor.workspaceId));
+  // Address of the weclapp tenant for links to the orders (no credentials).
+  const erp = await many<{ base_url: string }>(ctx.db, "SELECT base_url FROM erp_connections WHERE workspace_id = $1 LIMIT 1", [actor.workspaceId]);
   const counts = { open: all.filter((i) => !i.done).length, done: all.filter((i) => i.done).length };
   const items = filter === "all" ? all : all.filter((i) => (filter === "done" ? !!i.done : !i.done));
-  return { items: items.slice(0, 500), counts };
+  return { items: items.slice(0, 500), counts, erpBaseUrl: erp[0]?.base_url ?? null };
 }
 
 /** Where one case stands on the refund list, for the case view. */

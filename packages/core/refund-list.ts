@@ -54,6 +54,8 @@ export interface RefundListItem {
   conversationIds: string[];
   cases: Array<{ id: string; subject: string | null; platform: string; source: RefundSource; at: string | null }>;
   orderNumber: string | null;
+  /** ERP order id for the link to the order in weclapp. */
+  externalOrderId: string | null;
   marketplaceOrderNumber: string | null;
   customer: string | null;
   platform: string;
@@ -145,6 +147,11 @@ function itemsOf(order: RefundCandidate["order"]): { items: Array<{ title: strin
   return lines.length ? { items: lines.map((l) => ({ title: l.title, quantity: l.quantity })), from: "order" } : { items: [], from: null };
 }
 
+/** A marketplace notice arrives by mail; an Amazon order number tells the marketplace. */
+function platformOf(platform: string, numbers: ReadonlyArray<string>): string {
+  return platform === "email" && numbers.some((n) => /^\d{3}-\d{7}-\d{7}$/.test(n.trim())) ? "amazon" : platform;
+}
+
 const latest = (a: string | null, b: string | null) => (!a ? b : !b ? a : a > b ? a : b);
 const earliest = (a: string | null, b: string | null) => (!a ? b : !b ? a : a < b ? a : b);
 
@@ -192,9 +199,11 @@ export function groupRefunds(candidates: ReadonlyArray<RefundCandidate>): Refund
       conversationIds: members.map((m) => m.c.conversationId),
       cases: members.map((m) => ({ id: m.c.conversationId, subject: m.c.subject, platform: m.c.platform, source: m.source, at: m.c.lastMessageAt })),
       orderNumber: withOrder?.order?.orderNumber ?? null,
+      externalOrderId: withOrder?.externalOrderId ?? null,
       marketplaceOrderNumber: withOrder?.order?.orderNumberAtCustomer ?? numbers.find((n) => n !== withOrder?.order?.orderNumber) ?? null,
-      customer: members.map((m) => m.c.customerName).find((n) => n) ?? members.map((m) => m.c.customerAddress).find((n) => n) ?? null,
-      platform: (members.find((m) => m.source !== "notice") ?? members[0]!).c.platform ?? first.platform,
+      // A marketplace notice comes from the marketplace, not from the customer.
+      customer: members.filter((m) => m.source !== "notice").map((m) => m.c.customerName || m.c.customerAddress).find((n) => n) ?? null,
+      platform: platformOf((members.find((m) => m.source !== "notice") ?? members[0]!).c.platform ?? first.platform, numbers),
       kind: outcomes.includes("partial_refund") ? "partial" : outcomes.includes("refund") ? "full" : "unknown",
       amount: entered ? { cents: entered.amountCents!, currency: entered.currency ?? "EUR", from: "entered" } : notice ? { ...notice, from: "notice" } : null,
       items: lineItems,

@@ -366,3 +366,5 @@ a.button.refund-due:hover { background: var(--bad); border-color: var(--bad); }
 /* "Alle mit diesem Betreff-Muster": the pattern itself, readable and wrapping, under the label. */
 button.pattern-choice { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; height: auto; min-height: 36px; padding: 6px 12px; text-align: left; white-space: normal; max-width: 100%; }
 button.pattern-choice code { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.refund-order .weclapp-link { margin-top: 6px; min-height: 28px; padding: 0 10px; font-size: 12px; align-self: flex-start; }
+.refund-order { display: flex; flex-direction: column; min-width: 0; }

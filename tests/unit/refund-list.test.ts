@@ -75,6 +75,10 @@ describe("Erstattungsliste", () => {
     assert.equal(g.itemsFrom, "return");
     assert.deepEqual(g.creditNotes, ["GS-7"]);
     assert.equal(g.customer, "Kundin A");
+    assert.equal(g.externalOrderId, "so-1");
+    const only = groupRefunds([{ ...notice, platform: "email", customerName: "Benachrichtigungen von Amazon Seller Central" }])[0]!;
+    assert.equal(only.customer, null, "the notice sender is no customer");
+    assert.equal(only.platform, "amazon", "Amazon order number in a mailed notice");
     assert.deepEqual(g.cases.map((c) => c.source).sort(), ["notice", "outcome"]);
     assert.equal(g.done, null);
     // An amount a person entered wins over the notice.
