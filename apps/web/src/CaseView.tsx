@@ -706,6 +706,9 @@ function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; ca
   const savedAmount = enteredAmount(data);
   const [amount, setAmount] = useState(savedAmount);
   const isRefund = c.outcome === "refund" || c.outcome === "partial_refund";
+  const savedNote = c.outcome_note ?? "";
+  // Note and amount are saved together with the button (or Enter), not on leaving a field.
+  const dirty = note !== savedNote || (isRefund && amount.trim() !== savedAmount);
   const sent = data.outbox.find((o) => o.state === "provider_accepted" || o.state === "confirmed");
   return (
     <section className="card">
@@ -719,16 +722,24 @@ function Outcome({ data, canEdit, onSave, onAddToRefunds }: { data: CaseData; ca
         </select>
       </label>
       {c.outcome && (
-        <input placeholder="Notiz, z. B. Betrag, Artikel oder Antwort außerhalb von SupportX" value={note} disabled={!canEdit}
-          onChange={(e) => setNote(e.target.value)} onBlur={() => { if (note !== (c.outcome_note ?? "")) onSave(c.outcome, note); }}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
-      )}
-      {isRefund && (
-        <label className="stack small refund-amount-field">Erstatteter Betrag in €
-          <input inputMode="decimal" placeholder="z. B. 12,50" value={amount} disabled={!canEdit}
-            onChange={(e) => setAmount(e.target.value)} onBlur={() => { if (amount.trim() !== savedAmount) onSave(c.outcome, note, amount.trim() || null); }}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setAmount(savedAmount); }} />
-        </label>
+        <form className="outcome-details" onSubmit={(e) => { e.preventDefault(); if (dirty) onSave(c.outcome, note, isRefund ? amount.trim() || null : undefined); }}>
+          {isRefund && (
+            <label className="stack small refund-amount-field">Erstatteter Betrag in €
+              <input inputMode="decimal" placeholder="z. B. 12,50" value={amount} disabled={!canEdit} onChange={(e) => setAmount(e.target.value)} />
+            </label>
+          )}
+          <label className="stack small">{isRefund ? "Vermerk" : "Notiz"}
+            <input placeholder={isRefund ? "z. B. 25 % für fehlende Packung, keine Retoure" : "z. B. Artikel oder Antwort außerhalb von SupportX"} value={note} disabled={!canEdit} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          {canEdit && (
+            <div className="row wrap">
+              <button type="submit" className={dirty ? "primary small" : "small"} disabled={!dirty}>Speichern</button>
+              {dirty
+                ? <><span className="small warn-text">Noch nicht gespeichert.</span><button type="button" className="link small" onClick={() => { setNote(savedNote); setAmount(savedAmount); }}>Verwerfen</button></>
+                : <span className="small muted">Gespeichert.</span>}
+            </div>
+          )}
+        </form>
       )}
       {c.outcome_at && <p className="muted small">Erfasst {fmtDate(c.outcome_at)}</p>}
       <RefundListStatus status={data.refundList} canEdit={canEdit} onAdd={onAddToRefunds} />
