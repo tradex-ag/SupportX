@@ -7,7 +7,7 @@ import { addRoutingRule, buildChannel, createGraphConnection, createMerchantAcco
 import type { Actor, AppContext } from "../../packages/services/context.ts";
 import { enqueue } from "../../packages/services/jobs.ts";
 import { drainJobs } from "../../packages/services/worker.ts";
-import { loadConfig } from "../../packages/storage/config.ts";
+import { loadConfig, operatorEbayApp } from "../../packages/storage/config.ts";
 import { createPool, many, one, type Db } from "../../packages/storage/db.ts";
 import { migrate } from "../../packages/storage/migrate.ts";
 import { DEMO, demoInboundMails, demoWeclappData } from "../../packages/testing/demo-data.ts";
@@ -52,7 +52,7 @@ export async function createHarness(opts: { sendMode?: "drafts_only" | "enabled"
   const graph = await startFakeGraph({ mailbox: opts.mailbox ?? DEMO.mailbox, clientSecret: DEMO.graphSecret, hangMs: 400 });
   const connectors: ConnectorFactory = {
     channel: (row, secret) =>
-      row.kind !== "microsoft_graph" ? buildChannel(row, secret, { allowTestEndpoints: true, timeoutMs: opts.graphTimeoutMs ?? 2000 }) :
+      row.kind !== "microsoft_graph" ? buildChannel(row, secret, { allowTestEndpoints: true, timeoutMs: opts.graphTimeoutMs ?? 2000, ebayOperator: operatorEbayApp(config) }) :
       new GraphMailChannel({
         tenantId: row.config.tenantId, clientId: row.config.clientId, clientSecret: secret, mailbox: row.config.mailbox, ownAddresses: row.config.ownAddresses,
         graphBaseUrl: row.config.graphBaseUrl, authorityHost: row.config.authorityHost, allowTestEndpoints: true, timeoutMs: opts.graphTimeoutMs ?? 2000,

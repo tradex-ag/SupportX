@@ -3,6 +3,7 @@ import { caseAmazonListingAccess, listCaseListingActions } from "./amazon-listin
 import { CONNECTOR_CATALOG } from "../connectors/catalog.ts";
 import { customerText } from "../core/customer-text.ts";
 import { many, one, withTx } from "../storage/db.ts";
+import { operatorEbayApp } from "../storage/config.ts";
 import { audit } from "./audit.ts";
 import { enqueue } from "./jobs.ts";
 import { actorId, requireRole, ServiceError, type Actor, type AppContext } from "./context.ts";
@@ -599,6 +600,8 @@ export async function getSettings(ctx: AppContext, actor: Actor) {
     ai: { provider: ctx.ai.id, model: ctx.ai.model, promptVersion: ctx.ai.promptVersion },
     sendMode: ctx.config.SEND_MODE,
     demoMode: ctx.config.DEMO_MODE,
+    // Only whether the operator's eBay keyset exists; its values never leave the server.
+    ebayOperatorApp: operatorEbayApp(ctx.config) !== null,
   };
 }
 

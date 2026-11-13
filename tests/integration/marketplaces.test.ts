@@ -4,6 +4,7 @@ import { after, afterEach, describe, it } from "node:test";
 import { checkChannel, completeEbayConsent, createEbayConnection, createKauflandConnection, createMiraklConnection, replaceMarketplaceCredentials, setMiraklBackgroundSync, setSendEnabled, startEbayConsent, verifyReplyRoute } from "../../packages/services/connections.ts";
 import type { ServiceError } from "../../packages/services/context.ts";
 import { enqueue } from "../../packages/services/jobs.ts";
+import { getSettings } from "../../packages/services/cases.ts";
 import { approveDraft, dispatchOutbox, queueReply, reconcileOutbox } from "../../packages/services/replies.ts";
 import { drainJobs, scheduleTick } from "../../packages/services/worker.ts";
 import { inboxDisplayed } from "../../packages/services/fetch-status.ts";
@@ -213,6 +214,45 @@ describe("eBay consent", () => {
     assert.equal(conv?.source_platform, "ebay");
     assert.ok(conv!.order_references.some((r) => r.value === "12-34567-89012"));
     assert.ok(fake.requests.every((r) => !r.includes("send_message")), "nothing sent");
+  });
+});
+
+describe("eBay on the installation's keyset", () => {
+  it("lets the merchant connect with one click, without storing or showing the keyset", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    const fake = await startFakeEbay({ clientId: "operator-app", clientSecret: "operator-cert", seller: "auwald_shop", authCode: "code-9", refreshToken: "refresh-9" });
+    closers.push(() => fake.close());
+    fake.addConversation({ id: "C1", title: "Frage zu Bestellung 12-34567-89012", buyer: "kunde_1", text: "Wo ist mein Paket?" });
+    const cfg = h.ctx.config as { EBAY_CLIENT_ID?: string; EBAY_CLIENT_SECRET?: string; EBAY_RU_NAME?: string };
+
+    await rejectsWith(createEbayConnection(h.ctx, s.owner, { displayName: "eBay" }), "INVALID");
+    Object.assign(cfg, { EBAY_CLIENT_ID: "operator-app", EBAY_CLIENT_SECRET: "operator-cert", EBAY_RU_NAME: "Operator-RuName" });
+    assert.equal(((await getSettings(h.ctx, s.owner)) as { ebayOperatorApp?: boolean }).ebayOperatorApp, true);
+
+    const id = await createEbayConnection(h.ctx, s.owner, { displayName: "eBay", authBaseUrl: fake.baseUrl, apiBaseUrl: fake.baseUrl, identityBaseUrl: fake.baseUrl });
+    const url = new URL(await startEbayConsent(h.ctx, s.owner, id));
+    assert.equal(url.searchParams.get("client_id"), "operator-app");
+    assert.equal(url.searchParams.get("redirect_uri"), "Operator-RuName");
+    const done = await completeEbayConsent(h.ctx, s.ownerUserId, { state: url.searchParams.get("state")!, code: "code-9" });
+    assert.equal(done.sellerUsername, "auwald_shop");
+
+    const row = await one<{ config: Record<string, unknown>; secret_id: string }>(h.ctx.db, "SELECT config, secret_id FROM channel_connections WHERE id = $1", [id]);
+    assert.equal(row!.config.operatorApp, true);
+    assert.equal(row!.config.clientId, undefined, "the keyset stays in the server configuration");
+    const stored = JSON.parse(await h.ctx.secrets.read(h.ctx.db, s.workspaceId, row!.secret_id)) as Record<string, unknown>;
+    assert.equal(stored.clientSecret, undefined, "the operator's Cert ID is never copied into a workspace");
+    assert.equal(stored.refreshToken, "refresh-9");
+    const settingsText = JSON.stringify(await getSettings(h.ctx, s.owner));
+    for (const v of ["operator-cert", "Operator-RuName", "refresh-9"]) assert.ok(!settingsText.includes(v), `${v} is not in the settings payload`);
+
+    await sync(s, id);
+    const conv = await one<{ source_platform: string }>(h.ctx.db, "SELECT * FROM conversations WHERE connection_id = $1", [id]);
+    assert.equal(conv?.source_platform, "ebay");
+
+    // Keyset removed from the server: the connection reports it instead of guessing.
+    Object.assign(cfg, { EBAY_CLIENT_ID: undefined, EBAY_CLIENT_SECRET: undefined, EBAY_RU_NAME: undefined });
+    await rejectsWith(startEbayConsent(h.ctx, s.owner, id), "EBAY_APP_MISSING");
   });
 });
 

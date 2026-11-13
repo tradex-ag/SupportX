@@ -25,6 +25,12 @@ const schema = z.object({
   THEME_DIR: z.string().optional(),
   // eBay Marketplace Account Deletion: the verification token entered in the eBay developer portal (32–80 of A-Z a-z 0-9 _ -).
   EBAY_DELETION_VERIFICATION_TOKEN: z.string().regex(/^[A-Za-z0-9_-]{32,80}$/, "32–80 Zeichen, nur Buchstaben, Ziffern, _ und -").optional(),
+  // eBay keyset of this installation's operator (production App ID, Cert ID, RuName).
+  // Set all three and merchants only click "Bei eBay anmelden"; without them every
+  // merchant enters an own keyset in the settings.
+  EBAY_CLIENT_ID: z.string().trim().min(1).optional(),
+  EBAY_CLIENT_SECRET: z.string().trim().min(1).optional(),
+  EBAY_RU_NAME: z.string().trim().min(1).optional(),
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -37,8 +43,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error(`Ungültige Konfiguration:\n${lines.join("\n")}`);
   }
   const config = parsed.data;
+  const ebay = [config.EBAY_CLIENT_ID, config.EBAY_CLIENT_SECRET, config.EBAY_RU_NAME].filter(Boolean).length;
+  if (ebay !== 0 && ebay !== 3) throw new Error("eBay-Zugang der Installation unvollständig: EBAY_CLIENT_ID, EBAY_CLIENT_SECRET und EBAY_RU_NAME gehören zusammen.");
   if (config.AI_PROVIDER === "claude" && !config.ANTHROPIC_API_KEY) {
     throw new Error("AI_PROVIDER=claude benötigt ANTHROPIC_API_KEY.");
   }
   return config;
+}
+
+/** The operator's eBay keyset, or null when merchants bring their own. Server only, never sent to the browser. */
+export function operatorEbayApp(config: Pick<AppConfig, "EBAY_CLIENT_ID" | "EBAY_CLIENT_SECRET" | "EBAY_RU_NAME">): { clientId: string; clientSecret: string; ruName: string } | null {
+  if (!config.EBAY_CLIENT_ID || !config.EBAY_CLIENT_SECRET || !config.EBAY_RU_NAME) return null;
+  return { clientId: config.EBAY_CLIENT_ID, clientSecret: config.EBAY_CLIENT_SECRET, ruName: config.EBAY_RU_NAME };
 }

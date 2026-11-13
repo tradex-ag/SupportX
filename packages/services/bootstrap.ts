@@ -1,5 +1,5 @@
 import { checkClaudeKey, claudeWithKey, createAiProvider } from "../ai/index.ts";
-import type { AppConfig } from "../storage/config.ts";
+import { operatorEbayApp, type AppConfig } from "../storage/config.ts";
 import { createPool } from "../storage/db.ts";
 import { SecretBox } from "../storage/secrets.ts";
 import { defaultConnectorFactory } from "./connections.ts";
@@ -13,7 +13,7 @@ export function createContext(config: AppConfig, overrides: Partial<AppContext> 
     ai: overrides.ai ?? createAiProvider(config),
     aiWithKey: overrides.aiWithKey ?? ((apiKey) => claudeWithKey(config, apiKey)),
     checkAiKey: overrides.checkAiKey ?? ((apiKey) => checkClaudeKey(apiKey, config.CLAUDE_MODEL)),
-    connectors: overrides.connectors ?? defaultConnectorFactory(config.ALLOW_TEST_ENDPOINTS),
+    connectors: overrides.connectors ?? defaultConnectorFactory(config.ALLOW_TEST_ENDPOINTS, operatorEbayApp(config)),
     now: overrides.now ?? (() => new Date()),
   };
 }

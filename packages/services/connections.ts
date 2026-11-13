@@ -9,6 +9,7 @@ import { KauflandTicketsChannel } from "../connectors/kaufland/tickets-channel.t
 import { GraphMailChannel } from "../connectors/microsoft/graph-mail.ts";
 import { isOfficialMiraklHost, MiraklInboxChannel } from "../connectors/mirakl/inbox-channel.ts";
 import { validateWeclappBaseUrl, WeclappOrderProvider } from "../connectors/weclapp/adapter.ts";
+import { operatorEbayApp } from "../storage/config.ts";
 import { many, one, withTx, type Queryable } from "../storage/db.ts";
 import { audit } from "./audit.ts";
 import { actorFor } from "./auth.ts";
@@ -58,8 +59,11 @@ interface PollSettings {
 }
 
 export interface EbayConnectionSettings extends PollSettings {
-  clientId: string;
-  ruName: string;
+  /** Own keyset of this merchant; absent when `operatorApp` is set. */
+  clientId?: string;
+  ruName?: string;
+  /** Uses the installation's keyset (EBAY_CLIENT_ID/EBAY_CLIENT_SECRET/EBAY_RU_NAME); nothing of it is stored here. */
+  operatorApp?: boolean;
   sandbox?: boolean;
   /** Set by the OAuth callback. */
   sellerUsername?: string;
@@ -88,7 +92,8 @@ export interface MiraklConnectionSettings extends PollSettings {
 
 /** Secret payload of eBay and Kaufland connections (JSON in the encrypted secrets table). */
 export interface EbaySecret {
-  clientSecret: string;
+  /** Absent for connections on the operator's keyset. */
+  clientSecret?: string;
   refreshToken?: string;
   refreshTokenExpiresAt?: string;
 }
@@ -105,9 +110,17 @@ export function parseSecret<T>(secret: string, what: string): T {
   }
 }
 
-export function ebayApp(row: Pick<ChannelConnectionRow, "config">, clientSecret: string): EbayApp {
+export type OperatorEbayApp = { clientId: string; clientSecret: string; ruName: string };
+
+/** The keyset of one eBay connection: the merchant's own, or the operator's from the server configuration. */
+export function ebayApp(row: Pick<ChannelConnectionRow, "config">, secret: EbaySecret, operator: OperatorEbayApp | null | undefined): EbayApp {
   const c = row.config;
-  return { clientId: c.clientId, clientSecret, ruName: c.ruName, sandbox: c.sandbox, authBaseUrl: c.authBaseUrl, apiBaseUrl: c.apiBaseUrl, identityBaseUrl: c.identityBaseUrl };
+  const hosts = { authBaseUrl: c.authBaseUrl, apiBaseUrl: c.apiBaseUrl, identityBaseUrl: c.identityBaseUrl };
+  if (c.operatorApp) {
+    if (!operator) throw new ServiceError(409, "EBAY_APP_MISSING", "Der eBay-Zugang dieser Installation fehlt (EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME). Bitte den Betreiber fragen.");
+    return { ...operator, ...hosts };
+  }
+  return { clientId: c.clientId ?? "", clientSecret: secret.clientSecret ?? "", ruName: c.ruName ?? "", sandbox: c.sandbox, ...hosts };
 }
 
 export interface ErpConnectionRow {
@@ -140,13 +153,13 @@ export interface ConnectorFactory {
 }
 
 /** Builds the channel adapter for a stored connection. Shared by the default and the test factories. */
-export function buildChannel(row: ChannelConnectionRow, secret: string, opts: { allowTestEndpoints: boolean; timeoutMs?: number }): MessageChannel {
+export function buildChannel(row: ChannelConnectionRow, secret: string, opts: { allowTestEndpoints: boolean; timeoutMs?: number; ebayOperator?: OperatorEbayApp | null }): MessageChannel {
   const c = row.config;
   switch (row.kind) {
     case "ebay_messages": {
       const s = parseSecret<EbaySecret>(secret, "eBay");
       return new EbayMessageChannel({
-        ...ebayApp(row, s.clientSecret),
+        ...ebayApp(row, s, opts.ebayOperator),
         refreshToken: s.refreshToken ?? "",
         grantedScopes: c.grantedScopes ?? [],
         sellerUsername: c.sellerUsername ?? "",
@@ -178,9 +191,9 @@ export function buildChannel(row: ChannelConnectionRow, secret: string, opts: { 
   }
 }
 
-export function defaultConnectorFactory(allowTestEndpoints: boolean): ConnectorFactory {
+export function defaultConnectorFactory(allowTestEndpoints: boolean, ebayOperator: OperatorEbayApp | null = null): ConnectorFactory {
   return {
-    channel: (row, secret) => buildChannel(row, secret, { allowTestEndpoints }),
+    channel: (row, secret) => buildChannel(row, secret, { allowTestEndpoints, ebayOperator }),
     orders: (row, secret) =>
       new WeclappOrderProvider({ baseUrl: row.base_url, apiToken: secret, searchFields: row.search_fields, allowTestEndpoints }),
   };
@@ -434,14 +447,15 @@ export async function setMiraklBackgroundSync(ctx: AppContext, actor: Actor, con
 export async function createEbayConnection(
   ctx: AppContext,
   actor: Actor,
-  input: { displayName: string; clientId: string; clientSecret: string; ruName: string; sandbox?: boolean; defaultMerchantAccountId?: string | null; initialSyncDays?: number; authBaseUrl?: string; apiBaseUrl?: string; identityBaseUrl?: string },
+  input: { displayName?: string; clientId?: string; clientSecret?: string; ruName?: string; sandbox?: boolean; defaultMerchantAccountId?: string | null; initialSyncDays?: number; authBaseUrl?: string; apiBaseUrl?: string; identityBaseUrl?: string },
 ): Promise<string> {
   requireRole(actor, ["owner"]);
-  required({ clientId: input.clientId, clientSecret: input.clientSecret, ruName: input.ruName });
+  // Without own keys the connection runs on the operator's keyset: the merchant only signs in at eBay.
+  const own = !!(input.clientId?.trim() || input.clientSecret?.trim() || input.ruName?.trim());
+  if (own) required({ clientId: input.clientId, clientSecret: input.clientSecret, ruName: input.ruName });
+  else if (!operatorEbayApp(ctx.config)) throw new ServiceError(400, "INVALID", "Für diese Installation ist kein eBay-Zugang hinterlegt. Bitte App ID, Cert ID und RuName eintragen.");
   const config: EbayConnectionSettings = {
-    clientId: input.clientId.trim(),
-    ruName: input.ruName.trim(),
-    sandbox: input.sandbox === true,
+    ...(own ? { clientId: input.clientId!.trim(), ruName: input.ruName!.trim(), sandbox: input.sandbox === true } : { operatorApp: true }),
     initialSyncDays: input.initialSyncDays ?? 14,
     pollIntervalSec: 300,
     ...(input.authBaseUrl ? { authBaseUrl: input.authBaseUrl } : {}),
@@ -449,9 +463,9 @@ export async function createEbayConnection(
     ...(input.identityBaseUrl ? { identityBaseUrl: input.identityBaseUrl } : {}),
   };
   validateOffline(ctx, "ebay_messages", config, "");
-  const secret = JSON.stringify({ clientSecret: input.clientSecret.trim() } satisfies EbaySecret);
+  const secret = JSON.stringify((own ? { clientSecret: input.clientSecret!.trim() } : {}) satisfies EbaySecret);
   return withTx(ctx.db, (tx) =>
-    insertChannel(tx, actor, { kind: "ebay_messages", displayName: input.displayName.trim() || "eBay", config, secretPurpose: "ebay_oauth", secret, platform: "ebay", defaultMerchantAccountId: input.defaultMerchantAccountId }, ctx),
+    insertChannel(tx, actor, { kind: "ebay_messages", displayName: input.displayName?.trim() || "eBay", config, secretPurpose: "ebay_oauth", secret, platform: "ebay", defaultMerchantAccountId: input.defaultMerchantAccountId }, ctx),
   );
 }
 
@@ -472,7 +486,7 @@ export async function startEbayConsent(ctx: AppContext, actor: Actor, connection
     JSON.stringify({ oauthStateHash: hashState(state), oauthStateExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), oauthStateUserId: actor.userId }),
   ]);
   const secret = parseSecret<EbaySecret>(await ctx.secrets.read(ctx.db, row.workspace_id, row.secret_id), "eBay");
-  return buildEbayAuthorizeUrl(ebayApp(row, secret.clientSecret), state);
+  return buildEbayAuthorizeUrl(ebayApp(row, secret, operatorEbayApp(ctx.config)), state);
 }
 
 /**
@@ -495,12 +509,12 @@ export async function completeEbayConsent(ctx: AppContext, userId: string, input
     throw new ServiceError(400, "INVALID_STATE", "Die eBay-Anmeldung ist abgelaufen. Bitte neu starten.");
   }
   const old = parseSecret<EbaySecret>(await ctx.secrets.read(ctx.db, row.workspace_id, row.secret_id!), "eBay");
-  const app = { ...ebayApp(row, old.clientSecret), fetchImpl };
+  const app = { ...ebayApp(row, old, operatorEbayApp(ctx.config)), fetchImpl };
   const tokens = await exchangeEbayCode(app, input.code);
   if (!tokens.refreshToken) throw new ServiceError(502, "NO_REFRESH_TOKEN", "eBay lieferte keinen Refresh-Token.");
   const sellerUsername = await fetchEbayUsername(app, tokens.accessToken);
   await withTx(ctx.db, async (tx) => {
-    const secretId = await ctx.secrets.store(tx, row.workspace_id, "ebay_oauth", JSON.stringify({ clientSecret: old.clientSecret, refreshToken: tokens.refreshToken, refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } satisfies EbaySecret));
+    const secretId = await ctx.secrets.store(tx, row.workspace_id, "ebay_oauth", JSON.stringify({ ...(old.clientSecret ? { clientSecret: old.clientSecret } : {}), refreshToken: tokens.refreshToken, refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } satisfies EbaySecret));
     await tx.query(
       "UPDATE channel_connections SET secret_id = $3, config = config || $4::jsonb, health = 'unknown', last_error = NULL WHERE workspace_id = $1 AND id = $2",
       [row.workspace_id, row.id, secretId, JSON.stringify({ sellerUsername, grantedScopes: tokens.scopes })],

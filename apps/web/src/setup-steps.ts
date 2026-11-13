@@ -41,6 +41,8 @@ export interface SetupInput {
   erp: null | { has_secret: boolean; status: string; last_error: string | null };
   /** Owner tick-offs for external steps, by platform. */
   confirmations?: Readonly<Record<string, { at: string; by: string | null }>>;
+  /** The installation brings its own eBay keyset: the merchant only signs in at eBay. */
+  ebayOperatorApp?: boolean;
 }
 
 export const API_MARKETS = ["kaufland", "ebay", "shop_apotheke"] as const;
@@ -96,6 +98,16 @@ export function weclappSetup(input: SetupInput): ChannelSetup {
 export function marketSetup(market: Market, input: SetupInput): ChannelSetup {
   if (market === "kaufland" || market === "ebay" || market === "shop_apotheke") {
     const own = input.connections.filter((c) => c.kind === MARKET_KIND[market]);
+    if (market === "ebay" && input.ebayOperatorApp) {
+      // Like ASEIO: one click to eBay, no keys to type. The login creates the connection if needed.
+      const steps: SetupStep[] = [
+        { key: "ebay_login", title: "Bei eBay mit dem Verkäuferkonto anmelden", hint: "Du wirst zu eBay geleitet, meldest dich mit dem Verkäuferkonto an und stimmst zu. Schlüssel musst du keine eintragen.", done: own.some((c) => !!c.config.sellerUsername), action: "ebay_login" },
+        { key: "check", title: "Verbindung testen", done: own.some(healthy), action: own.length ? "check" : undefined },
+      ];
+      if (!steps[1]!.action) delete steps[1]!.action;
+      const err = own.find((c) => c.health === "error" && !c.paused)?.last_error ?? null;
+      return { ...finish(market, LABEL[market], WAY[market], steps, own.some(healthy), err), sending: sendingOf(market, own.find(healthy), input) };
+    }
     const steps: SetupStep[] = [{ key: "connect", ...ZUGANG[market], done: own.length > 0, action: "connect" }];
     if (market === "ebay") steps.push({ key: "ebay_login", title: "Bei eBay mit dem Verkäuferkonto anmelden", done: own.some((c) => !!c.config.sellerUsername), action: "ebay_login" });
     steps.push({ key: "check", title: "Verbindung testen", done: own.some(healthy), action: "check" });

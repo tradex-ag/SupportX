@@ -28,7 +28,7 @@ interface SettingsData {
   erp: null | { base_url: string; search_fields: string[]; has_secret: boolean; status: string; last_checked_at: string | null; last_error: string | null };
   categoryRules: Array<{ id: string; match_type: string; pattern: string; category: "support" | "info"; hits: number; last_hit_at: string | null }>;
   jobs: Array<{ type: string; status: string; count: number; last_error: string | null }>;
-  catalog: Descriptor[]; ai: { provider: string; model: string; promptVersion: string }; sendMode: string; demoMode: boolean;
+  catalog: Descriptor[]; ai: { provider: string; model: string; promptVersion: string }; sendMode: string; demoMode: boolean; ebayOperatorApp?: boolean;
 }
 
 const PLATFORMS = ["email", "amazon", "ebay", "kaufland", "shop_apotheke", "docmorris", "shopify"];
@@ -155,7 +155,14 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
           if (a === "check" && kind) return checkFirst(kind);
           if (a === "confirm" || a === "unconfirm") return void act(() => api("POST", `${base}/setup-confirmations`, { platform: m, done: a === "confirm" }), () => a === "confirm" ? "Abgehakt." : "Haken entfernt.");
           if (a === "credentials") return setPanel({ card: m, action: a, id: (own.find((c) => c.health === "error") ?? own[0])?.id });
-          if (a === "ebay_login" && own[0]) return void act(async () => { const r = await api<{ url: string }>("POST", `${base}/connections/${own[0]!.id}/ebay/authorize`); window.location.assign(r.url); });
+          if (a === "ebay_login" && (own[0] || data.ebayOperatorApp)) {
+            return void act(async () => {
+              // With the installation's keyset the first click creates the connection, then goes straight to eBay.
+              const id = own[0]?.id ?? (await api<{ id: string }>("POST", `${base}/connections/ebay`, { displayName: "eBay" })).id;
+              const r = await api<{ url: string }>("POST", `${base}/connections/${id}/ebay/authorize`);
+              window.location.assign(r.url);
+            });
+          }
           setPanel({ card: m, action: a });
         };
         return (

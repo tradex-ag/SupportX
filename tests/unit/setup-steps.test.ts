@@ -95,3 +95,13 @@ test("API market with refused keys: the next step is to enter new keys, not to t
   const paused = marketSetup("ebay", { ...empty, connections: [conn("e1", "ebay_messages", { health: "error", paused: true, last_error: "Zugang abgelehnt (401)", config: { sellerUsername: "x" } })] });
   assert.notEqual(paused.next?.action, "credentials");
 });
+
+test("eBay with the installation's keyset: no keys to enter, the login is the first step and works without a connection", () => {
+  const fresh = marketSetup("ebay", { ...empty, ebayOperatorApp: true });
+  assert.deepEqual(fresh.steps.map((st) => st.key), ["ebay_login", "check"]);
+  assert.equal(fresh.next?.action, "ebay_login");
+  assert.equal(fresh.steps[1]!.action, undefined, "nothing to test before the login");
+  const loggedIn = marketSetup("ebay", { ...empty, ebayOperatorApp: true, connections: [conn("e1", "ebay_messages", { config: { sellerUsername: "shop" } })] });
+  assert.equal(loggedIn.connected, true);
+  assert.equal(loggedIn.next, null);
+});
