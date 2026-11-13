@@ -20,7 +20,7 @@ const amountText = (a: RefundListItem["amount"]) => (a ? formatAmount(a.cents, a
  * SupportX does not refund and does not write to weclapp.
  */
 export function Refunds({ workspaceId, role, onOpenCase, onCounts }: { workspaceId: string; role: Role; onOpenCase: (id: string) => void; onCounts?: (open: number) => void }) {
-  const [filter, setFilter] = useState<Filter>("open");
+  const [filter, setFilter] = useState<Filter>("all");
   const [items, setItems] = useState<RefundListItem[] | null>(null);
   const [counts, setCounts] = useState<{ open: number; done: number } | null>(null);
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(null);
@@ -65,7 +65,7 @@ export function Refunds({ workspaceId, role, onOpenCase, onCounts }: { workspace
       <div className="settings-title wide row">
         <h2>Erstattungen</h2>
         <div className="row">
-          {([["open", "Offen", counts?.open], ["done", "Erledigt", counts?.done], ["all", "Alle", null]] as const).map(([id, label, n]) => (
+          {([["all", "Alle", counts ? counts.open + counts.done : null], ["open", "Offen", counts?.open], ["done", "Erledigt", counts?.done]] as const).map(([id, label, n]) => (
             <button key={id} className={filter === id ? "chip active" : "chip"} onClick={() => setFilter(id)}>
               {label}{typeof n === "number" ? <span className="count">{n}</span> : null}
             </button>
