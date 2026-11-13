@@ -10,6 +10,7 @@ import { one } from "../../packages/storage/db.ts";
 import { DEFAULT_THEME, parseTheme, publicTheme, themeCss, type Theme } from "../../packages/core/theme.ts";
 import { actorFor, changePassword, login, logout, userForSession, workspacesFor } from "../../packages/services/auth.ts";
 import { deleteSnippet, listSnippets, saveSnippet } from "../../packages/services/snippets.ts";
+import { addTeamMember, listTeam, removeTeamMember, setTeamPassword, setTeamRole } from "../../packages/services/team.ts";
 import { setAutomation, setCaseTopic } from "../../packages/services/automation.ts";
 import { addNote, assign, caseCounts, checkWorkspaceAiKey, deleteCategoryRule, exportCasesCsv, getCase, getSettings, leavePresence, listCases, setCaseCategory, previewSubjectPattern, touchPresence, setOutcome, setStatus, setSetupConfirmation, setWorkspaceAiKey, updateWorkspaceSettings, type CaseFilter } from "../../packages/services/cases.ts";
 import {
@@ -173,6 +174,24 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     const user = await one<{ id: string; email: string; display_name: string }>(ctx.db, "SELECT id, email, display_name FROM users WHERE id = $1", [req.userId]);
     return { user, workspaces: await workspacesFor(ctx.db, req.userId!), demoMode: ctx.config.DEMO_MODE, sendMode: ctx.config.SEND_MODE };
   });
+
+  // --- Team (owners only; passwords go in, never out) ------------------------
+  app.get("/api/w/:ws/team", async (req) => ({ members: await listTeam(ctx, await actor(req)) }));
+  app.post("/api/w/:ws/team", async (req) => {
+    const body = parse(z.object({ email: z.string().max(320), displayName: z.string().max(200), role: z.enum(["owner", "agent", "viewer"]), password: z.string().max(200) }), req.body);
+    return addTeamMember(ctx, await actor(req), body);
+  });
+  app.post("/api/w/:ws/team/:userId/role", async (req) => {
+    const body = parse(z.object({ role: z.enum(["owner", "agent", "viewer"]) }), req.body);
+    await setTeamRole(ctx, await actor(req), (req.params as { userId: string }).userId, body.role);
+    return { ok: true };
+  });
+  app.post("/api/w/:ws/team/:userId/password", async (req) => {
+    const body = parse(z.object({ password: z.string().min(1).max(200) }), req.body);
+    await setTeamPassword(ctx, await actor(req), (req.params as { userId: string }).userId, body.password);
+    return { ok: true };
+  });
+  app.delete("/api/w/:ws/team/:userId", async (req) => removeTeamMember(ctx, await actor(req), (req.params as { userId: string }).userId));
 
   // --- Cases -----------------------------------------------------------------
   app.get("/api/w/:ws/cases", async (req) => {

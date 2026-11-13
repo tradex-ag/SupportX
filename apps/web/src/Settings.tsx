@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AmazonListingsCard } from "./AmazonListingsSettings.tsx";
-import { api, fmtDate, PLATFORM_LABEL } from "./api.ts";
+import { api, fmtDate, PLATFORM_LABEL, ROLE_HINT, ROLE_LABEL } from "./api.ts";
 import { DEADLINE_PLATFORMS, DEFAULT_REPLY_DEADLINES, MAX_DEADLINE_HOURS } from "../../../packages/core/deadline.ts";
 import { SNIPPET_PLACEHOLDERS } from "../../../packages/core/snippet-placeholders.ts";
 import { API_MARKETS, MAIL_MARKETS, MARKET_KIND, marketSetup, microsoftSetup, weclappSetup, type ChannelSetup, type StepAction } from "./setup-steps.ts";
@@ -191,6 +191,8 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
         onCheck={() => act(() => api("POST", `${base}/ai-key/check`), checkResult)}
       />
 
+      {owner && <TeamCard base={base} />}
+
       <PasswordForm onSubmit={(body) => act(() => api("POST", "/api/password", body), () => "Passwort geändert. Andere angemeldete Geräte sind abgemeldet.")} />
 
       <details className="card wide">
@@ -363,6 +365,129 @@ function SecretForm({ onSubmit }: { onSubmit: (secret: string) => void }) {
     <form className="stack inset" onSubmit={(e) => { e.preventDefault(); onSubmit(secret); }}>
       <SecretField value={secret} onChange={setSecret} />
       <div className="row"><button type="submit" className="primary">Schlüssel speichern</button></div>
+    </form>
+  );
+}
+
+interface TeamMember { userId: string; email: string; displayName: string; role: Role; isMe: boolean; otherWorkspaces: boolean; activeSessions: number }
+const ROLES: Role[] = ["agent", "viewer", "owner"];
+
+/** Owners add colleagues here. Passwords are typed into hidden fields and never shown again. */
+function TeamCard({ base }: { base: string }) {
+  const [members, setMembers] = useState<TeamMember[] | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [pwFor, setPwFor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    try {
+      setMembers((await api<{ members: TeamMember[] }>("GET", `${base}/team`)).members);
+    } catch (err) {
+      setMessage({ ok: false, text: (err as Error).message });
+    }
+  }, [base]);
+  useEffect(() => void load(), [load]);
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      setMessage({ ok: true, text: await fn() });
+      await load();
+      return true;
+    } catch (err) {
+      setMessage({ ok: false, text: (err as Error).message });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card wide">
+      <h3>Team</h3>
+      <p className="muted">Wer sich hier anmelden darf. Neue Personen bekommen ein Startpasswort, das Sie ihnen selbst mitteilen (nicht per Mail im Klartext). Danach ändern sie es unter „Mein Passwort“.</p>
+      {members === null ? <p className="small muted">Lädt …</p> : (
+        <table>
+          <thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th /></tr></thead>
+          <tbody>{members.map((m) => (
+            <tr key={m.userId}>
+              <td>{m.displayName}{m.isMe && <span className="small muted"> (Sie)</span>}</td>
+              <td><code>{m.email}</code></td>
+              <td>
+                {m.isMe ? ROLE_LABEL[m.role] : (
+                  <select value={m.role} disabled={busy} aria-label={`Rolle von ${m.displayName}`}
+                    onChange={(e) => void run(async () => { await api("POST", `${base}/team/${m.userId}/role`, { role: e.target.value }); return `${m.displayName} ist jetzt ${ROLE_LABEL[e.target.value as Role]}.`; })}>
+                    {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+                  </select>
+                )}
+              </td>
+              <td>
+                {!m.isMe && (
+                  <div className="row">
+                    {!m.otherWorkspaces && <button className="link" disabled={busy} onClick={() => setPwFor(pwFor === m.userId ? null : m.userId)}>Passwort neu setzen</button>}
+                    <button className="link" disabled={busy} onClick={() => { if (window.confirm(`${m.displayName} aus dem Team entfernen? Die Anmeldung hier ist danach gesperrt.`)) void run(async () => { await api("DELETE", `${base}/team/${m.userId}`); return `${m.displayName} ist entfernt und abgemeldet.`; }); }}>entfernen</button>
+                  </div>
+                )}
+                {pwFor === m.userId && (
+                  <NewPasswordForm label={`Neues Passwort für ${m.displayName}`} busy={busy} submitLabel="Passwort setzen" onCancel={() => setPwFor(null)}
+                    onSubmit={async (password) => { const ok = await run(async () => { await api("POST", `${base}/team/${m.userId}/password`, { password }); return `Neues Passwort für ${m.displayName} gesetzt. Alle Geräte sind abgemeldet.`; }); if (ok) setPwFor(null); return ok; }} />
+                )}
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+      <p className="small muted">{ROLES.map((r) => `${ROLE_LABEL[r]}: ${ROLE_HINT[r]}`).join(" · ")}</p>
+      {!adding ? <div className="row"><button type="button" onClick={() => { setAdding(true); setMessage(null); }}>Person hinzufügen</button></div> : (
+        <AddMemberForm busy={busy} onCancel={() => setAdding(false)}
+          onSubmit={async (body) => {
+            const ok = await run(async () => {
+              const r = await api<{ existingLogin: boolean }>("POST", `${base}/team`, body);
+              return r.existingLogin
+                ? `${body.displayName} hat schon einen SupportX-Login und meldet sich mit dem bisherigen Passwort an. Das eingetragene Startpasswort wurde nicht verwendet.`
+                : `${body.displayName} ist angelegt. Anmeldung mit ${body.email} und dem Startpasswort, das Sie eben vergeben haben.`;
+            });
+            if (ok) setAdding(false);
+            return ok;
+          }} />
+      )}
+      {message && <p className={message.ok ? "small ok-text" : "small error"} role="status">{message.text}</p>}
+    </section>
+  );
+}
+
+function AddMemberForm({ busy, onSubmit, onCancel }: { busy: boolean; onSubmit: (body: { displayName: string; email: string; role: Role; password: string }) => Promise<boolean>; onCancel: () => void }) {
+  const [displayName, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<Role>("agent");
+  return (
+    <div className="stack inset">
+      <label>Name<input value={displayName} onChange={(e) => setName(e.target.value)} autoComplete="off" required /></label>
+      <label>E-Mail (damit meldet sich die Person an)<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" spellCheck={false} required /></label>
+      <label>Rolle
+        <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]} ({ROLE_HINT[r]})</option>)}
+        </select>
+      </label>
+      <NewPasswordForm label="Startpasswort (mindestens 10 Zeichen)" busy={busy} submitLabel="Anlegen" onCancel={onCancel}
+        onSubmit={(password) => onSubmit({ displayName, email, role, password })} disabled={!displayName.trim() || !email.trim()} />
+    </div>
+  );
+}
+
+/** Password typed twice into hidden fields; cleared after a successful save. */
+function NewPasswordForm({ label, submitLabel, busy, disabled, onSubmit, onCancel }: { label: string; submitLabel: string; busy: boolean; disabled?: boolean; onSubmit: (password: string) => Promise<boolean>; onCancel: () => void }) {
+  const [password, setPassword] = useState("");
+  const [repeat, setRepeat] = useState("");
+  const mismatch = repeat !== "" && repeat !== password;
+  return (
+    <form className="stack" onSubmit={async (e) => { e.preventDefault(); if (mismatch) return; if (await onSubmit(password)) { setPassword(""); setRepeat(""); } }}>
+      <label>{label}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" minLength={10} required /></label>
+      <label>Wiederholen<input type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} autoComplete="new-password" required /></label>
+      {mismatch && <p className="error">Die beiden Passwörter sind nicht gleich.</p>}
+      <div className="row">
+        <button type="submit" className="primary" disabled={busy || mismatch || disabled}>{submitLabel}</button>
+        <button type="button" onClick={onCancel}>Abbrechen</button>
+      </div>
     </form>
   );
 }
