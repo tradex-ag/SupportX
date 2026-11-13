@@ -371,3 +371,4 @@ button.pattern-choice code { font-family: var(--mono); font-size: 12px; color: v
 /* Ticked off: struck through and below the open ones (the list sorts done last). */
 .refund-row.done .refund-number, .refund-row.done .refund-items li, .refund-row.done .refund-kind, .refund-row.done .refund-sum { text-decoration: line-through; text-decoration-color: var(--muted); }
 .full-refund { align-self: flex-start; margin: 4px 0 8px; }
+.resolve-at { margin: 6px 0 0; max-width: 34em; }

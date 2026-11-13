@@ -14,6 +14,7 @@ import { RETURN_STATUS_DE, returnSummary, type ReturnFact, type ReturnSummary } 
 import type { RefundDue } from "../../../packages/core/refund-due.ts";
 import { formatMoney, type ReturnCheck } from "../../../packages/core/return-check.ts";
 import { formatAmount, type RefundListItem } from "../../../packages/core/refund-list.ts";
+import type { MarketplaceResolve } from "../../../packages/core/marketplace-resolve.ts";
 
 type Role = "owner" | "agent" | "viewer";
 type Rec = Record<string, unknown>;
@@ -81,6 +82,7 @@ interface CaseData {
   returnCheck?: ReturnCheck | null;
   /** Where the case stands on the refund list ("Erstattungen"). */
   refundList?: { state: "none" | "open" | "done"; removed: boolean; item: Pick<RefundListItem, "done" | "amount" | "kind"> | null };
+  resolveAt?: MarketplaceResolve | null;
 }
 
 /** Readable names for the Protokoll; unknown actions show their technical name. */
@@ -241,11 +243,21 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
               <div className="status-buttons" role="group" aria-labelledby="case-status-label">
                 {CASE_STATUS.map((st) => (
                   <button key={st.value} className={`status-${st.value}${c.status === st.value ? " active" : ""}`} aria-pressed={c.status === st.value}
-                    onClick={() => c.status !== st.value && (st.value === "closed" && c.category === "support" ? setClosing(true) : act(() => api("POST", `${base}/cases/${caseId}/status`, { status: st.value })))}>
+                    onClick={() => {
+                      if (c.status === st.value) return;
+                      // Support cases ask for the outcome first; Amazon's "Fall lösen" opens on that confirm click.
+                      if (st.value === "closed" && c.category === "support") { setClosing(true); return; }
+                      const at = st.value === "closed" ? data.resolveAt ?? null : null;
+                      // Amazon has no interface to close a buyer message: open its own "Fall lösen" page
+                      // in the same click (popup blockers allow that), the person confirms there.
+                      if (at?.state === "open") window.open(at.url, "_blank", "noopener,noreferrer");
+                      void act(() => api("POST", `${base}/cases/${caseId}/status`, { status: st.value }), at ? RESOLVE_NOTICE[at.state] : undefined);
+                    }}>
                     <i aria-hidden="true" />{st.label}
                   </button>
                 ))}
               </div>
+              {c.status === "closed" && data.resolveAt && <ResolveAtMarketplace at={data.resolveAt} />}
               {c.status === "waiting" && (
                 <FollowUp key={c.snooze_until ?? "none"} value={c.snooze_until} onSet={(iso) => act(() => api("POST", `${base}/cases/${caseId}/status`, { status: "waiting", snoozeUntil: iso }), iso ? "Wiedervorlage gespeichert. Der Fall kommt an dem Tag wieder unter „Anfragen“." : "Wiedervorlage entfernt.")} />
               )}
@@ -271,10 +283,12 @@ export function CaseView({ workspaceId, caseId, role, onChanged, onOpenCase }: {
         <CloseCase key={c.outcome ?? "none"} data={data} onCancel={() => setClosing(false)}
           onClose={async (outcome, note, amount) => {
             setClosing(false);
+            const at = data.resolveAt ?? null;
+            if (at?.state === "open") window.open(at.url, "_blank", "noopener,noreferrer");
             await act(async () => {
               if (outcome !== undefined) await api("POST", `${base}/cases/${caseId}/outcome`, { outcome, note, ...(amount !== undefined ? { amount } : {}) });
               await api("POST", `${base}/cases/${caseId}/status`, { status: "closed" });
-            }, outcome === "refund" || outcome === "partial_refund" ? "Erledigt. Die Erstattung steht auf der Erstattungsliste." : "Erledigt.");
+            }, [outcome === "refund" || outcome === "partial_refund" ? "Erledigt. Die Erstattung steht auf der Erstattungsliste." : "Erledigt.", at ? RESOLVE_NOTICE[at.state].replace(/^Erledigt\. /, "") : ""].filter(Boolean).join(" "));
           }} />
       )}
       {error && <p className="notice bad">{error}</p>}
@@ -1452,5 +1466,23 @@ function SubjectRuleEditor({ subject, target, base, onSave, onCancel }: {
         <button className="link" onClick={onCancel}>Abbrechen</button>
       </div>
     </div>
+  );
+}
+
+const RESOLVE_NOTICE: Record<MarketplaceResolve["state"], string> = {
+  open: "Erledigt. Amazon ist in einem neuen Tab geöffnet: dort „Fall lösen“ bestätigen, sonst bleibt die Nachricht bei Amazon offen.",
+  answered: "Erledigt. Bei Amazon ist die Nachricht durch eure Antwort über Amazon beantwortet.",
+  no_link: "Erledigt. In der Amazon-Mail fehlt der Link zur Nachricht: bei Bedarf in Seller Central unter Käufer-Verkäufer-Nachrichten lösen.",
+};
+
+/** What "Erledigt" means at the marketplace. Amazon offers no interface for it, so no claim it is closed there. */
+function ResolveAtMarketplace({ at }: { at: MarketplaceResolve }) {
+  if (at.state === "answered") return <p className="small muted resolve-at">Amazon: durch eure Antwort beantwortet.</p>;
+  if (at.state === "no_link") return <p className="small muted resolve-at">Amazon: kein Link in der Mail, bei Bedarf in Seller Central lösen.</p>;
+  return (
+    <p className="small resolve-at">
+      Amazon: falls noch nicht geschehen, <a href={at.url} target="_blank" rel="noopener noreferrer">bei Amazon „{at.label}“ ↗</a>.
+      <span className="muted"> Amazon hat dafür keine Schnittstelle, die Bestätigung geht nur dort.</span>
+    </p>
   );
 }

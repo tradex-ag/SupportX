@@ -9,6 +9,7 @@ import { actorId, requireRole, ServiceError, type Actor, type AppContext } from 
 import { aiWriter, sendBlockers, titleHintsFor } from "./replies.ts";
 import { listCaseFiles, REPLY_FILES } from "./documents.ts";
 import { invoiceSummary } from "./invoices.ts";
+import { marketplaceResolve } from "../core/marketplace-resolve.ts";
 import { OWN_COPY_REASON, SYSTEM_NOTICE_REASON, ownCopyText, ruleReason } from "../core/category.ts";
 import { checkSubjectPattern, matchesSubjectPattern } from "../core/subject-pattern.ts";
 import type { Queryable } from "../storage/db.ts";
@@ -232,7 +233,13 @@ export async function getCase(ctx: AppContext, actor: Actor, conversationId: str
   const [listingActions, amazonListings] = await Promise.all([listCaseListingActions(ctx.db, ws, conversationId), caseAmazonListingAccess(ctx.db, ws)]);
   const refundList = await caseRefundStatus(ctx, ws, conversationId);
   const { refund, returnCheck: returnCheckResult } = await refundDueFor(ctx, ws, conversationId, conversation as { outcome: string | null; subject: string | null }, orderLink as { status: string; external_order_id: string | null; snapshot: OrderRecord | null } | null);
-  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund, returnCheck: returnCheckResult, refundList };
+  // What "Erledigt" still needs at the marketplace (Amazon: answered via relay, or its own "Fall lösen" link).
+  const resolveAt = marketplaceResolve(
+    (conversation as { source_platform: string }).source_platform,
+    [...(messages as Array<{ direction: string; kind: string; body_text: string; received_at: Date }>),
+     ...(related as Array<{ direction: string; kind: string; body_text: string; received_at: Date }>).filter((m) => m.kind === "own_copy")],
+  );
+  return { conversation, messages, forwards, relatedMessages: related.reverse(), customerHistory, notes, orderLink, drafts, approvals, outbox, history, accounts, members, send, linkTargets, titleHints, writer, replyFiles, caseFiles, invoices, listingActions, amazonListings, refund, returnCheck: returnCheckResult, refundList, resolveAt };
 }
 
 /**
