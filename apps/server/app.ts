@@ -34,6 +34,7 @@ import {
   verifyReplyRoute,
   type GraphConnectionSettings,
 } from "../../packages/services/connections.ts";
+import { inboxDisplayed } from "../../packages/services/fetch-status.ts";
 import { EBAY_DELETION_PATH, ebayChallengeResponse } from "../../packages/connectors/ebay/account-deletion.ts";
 import { handleEbayAccountDeletion } from "../../packages/services/ebay-account-deletion.ts";
 import { ServiceError, type Actor, type AppContext } from "../../packages/services/context.ts";
@@ -559,6 +560,8 @@ export async function buildServer(ctx: AppContext, opts: { logger?: boolean; eba
     await enqueue(ctx.db, { workspaceId: a.workspaceId, type: "mail.sync", payload: { connectionId: id }, dedupeKey: `mail.sync:${id}`, maxAttempts: 3 });
     return { ok: true };
   });
+  // The inbox is on screen: Mirakl inboxes without background permission are read now (throttled).
+  app.post("/api/w/:ws/inbox/displayed", async (req) => inboxDisplayed(ctx, await actor(req)));
   app.post("/api/w/:ws/connections/:id/send-enabled", async (req) => {
     await setSendEnabled(ctx, await actor(req), (req.params as { id: string }).id, parse(z.object({ enabled: z.boolean() }), req.body).enabled);
     return { ok: true };

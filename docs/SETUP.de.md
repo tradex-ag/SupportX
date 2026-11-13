@@ -120,7 +120,7 @@ Alle drei kommen per Schnittstelle, nicht per Mail. Mails der Marktplätze sind 
 **Shop Apotheke (Mirakl)**
 1. Im Mirakl-Backoffice von Shop Apotheke in den Benutzereinstellungen den API-Schlüssel kopieren und die Adresse der Instanz notieren (`https://….mirakl.net`).
 2. *Einstellungen → Shop Apotheke verbinden …*, Adresse und Schlüssel eintragen (Shop-ID nur bei mehreren Shops).
-3. Mirakl sieht das Lesen nur beim Öffnen des Posteingangs vor. SupportX liest deshalb nur bei *Jetzt abrufen*. Erlaubt Shop Apotheke einen Hintergrundabruf, den Nachweis bei der Verbindung eintragen; erst dann ruft der Worker alle 15 Minuten ab.
+3. Mirakl sieht das Lesen nur beim Öffnen des Posteingangs vor. SupportX liest deshalb automatisch beim Öffnen der App (Startseite ist der Posteingang), danach höchstens alle 10 Minuten, solange der Posteingang in einem sichtbaren Tab offen ist, und bei *Jetzt abrufen*. Wurde länger als 4 Stunden nicht abgerufen, warnen Posteingang und Karte. Erlaubt Shop Apotheke einen Hintergrundabruf, den Nachweis bei der Verbindung eintragen; erst dann ruft der Worker alle 15 Minuten ab.
 
 **Schlüssel austauschen:** Lehnt ein Marktplatz die Schlüssel ab (z. B. Kaufland 401 „shop-client-key not known“) oder wurden neue erzeugt, an der Verbindung *Zugangsdaten ändern* klicken und die neuen Werte eintragen. Die gespeicherten Werte werden nie angezeigt; Fälle, Regeln und Einstellungen bleiben erhalten. Bei eBay bleibt die Verkäufer-Anmeldung mit derselben App ID gültig; mit einer neuen App ID danach erneut *Bei eBay anmelden*.
 

@@ -24,7 +24,7 @@ The eBay, Kaufland and Mirakl adapters live in `packages/connectors/{ebay,kaufla
 - use the same outbox, approval and reply-route verification as mail; sending stays off until a controlled reply is recorded and the connection is switched on;
 - carry no custom headers, so our own reply is recognised (echo, reconciliation) by exact text in the same thread, or by the provider message id returned from the send call;
 - put the marketplace order id into the case subject with a label (`Bestellung …`) so the normal reference extraction looks it up in weclapp; a listing id is never treated as an order id;
-- poll in bounded intervals (`pollIntervalSec`, eBay and Kaufland 5 min). Mirakl is read only when someone clicks *Jetzt abrufen*, until the owner records the operator's permission for background reads.
+- poll in bounded intervals (`pollIntervalSec`, eBay and Kaufland 5 min). Mirakl is read while the SupportX inbox is on screen (at most every 10 min per connection, only in a visible tab) and when someone clicks *Jetzt abrufen*, until the owner records the operator's permission for background reads. Connections not read for more than 4 hours are flagged in the inbox and on their card.
 
 ## Preparing native channels (M3, original notes)
 
@@ -111,7 +111,7 @@ Shop Apotheke's partner information confirms Mirakl as its marketplace technolog
 
 Use the actual operator instance, shop identifier and allowed message scopes. Resolve the thread's order reference in weclapp; no Mirakl order-import connector is required. M11 uses seek pagination; its optional included messages are limited to the last 100 messages per thread. This is not a complete historical export guarantee.
 
-**M10/M11 publicly document synchronous use tied to an inbox display.** Do not interpret `updated_since` as permission for continuous background polling. Confirm an approved automation/synchronization route with the operator before scheduling unattended retrieval. Email notifications may trigger local review, but they do not establish API permission. See [SA-1 and MIR-1–MIR-3](SOURCES.md#shop-apotheke-and-mirakl).
+**M10/M11 publicly document synchronous use tied to an inbox display.** Do not interpret `updated_since` as permission for continuous background polling. Confirm an approved automation/synchronization route with the operator before scheduling unattended retrieval. SupportX treats its own inbox page as the inbox display: `POST /api/w/:ws/inbox/displayed` (sent once a minute while the inbox tab is visible) queues a read when the last one is older than 10 minutes. Nothing is read on a timer when nobody looks. Email notifications may trigger local review, but they do not establish API permission. See [SA-1 and MIR-1–MIR-3](SOURCES.md#shop-apotheke-and-mirakl).
 
 ## DocMorris
 

@@ -113,7 +113,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorDescriptor> = [
   {
     platform: "shop_apotheke",
     label: "Shop Apotheke (Mirakl M10/M11/M12)",
-    transport: "Mirakl-Posteingang der Betreiber-Instanz; Abruf per Klick, Hintergrundabruf nur mit Freigabe",
+    transport: "Mirakl-Posteingang der Betreiber-Instanz; Abruf bei offenem Posteingang (höchstens alle 10 min) und per Klick, Hintergrundabruf nur mit Freigabe",
     implementation: "implemented",
     receive: "configured",
     reply: "configured",

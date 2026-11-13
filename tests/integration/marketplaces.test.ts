@@ -6,6 +6,7 @@ import type { ServiceError } from "../../packages/services/context.ts";
 import { enqueue } from "../../packages/services/jobs.ts";
 import { approveDraft, dispatchOutbox, queueReply, reconcileOutbox } from "../../packages/services/replies.ts";
 import { drainJobs, scheduleTick } from "../../packages/services/worker.ts";
+import { inboxDisplayed } from "../../packages/services/fetch-status.ts";
 import { many, one } from "../../packages/storage/db.ts";
 import { buildServer } from "../../apps/server/app.ts";
 import { signEbayNotice, startFakeEbay, startFakeKaufland, startFakeMirakl } from "../../packages/testing/fake-marketplaces.ts";
@@ -119,6 +120,65 @@ describe("Shop Apotheke (Mirakl)", () => {
     await scheduleTick(h.ctx);
     const after = await many(h.ctx.db, "SELECT 1 FROM jobs WHERE type = 'mail.sync' AND payload->>'connectionId' = $1 AND status = 'queued'", [id]);
     assert.equal(after.length, 1);
+  });
+});
+
+describe("Shop Apotheke read while the inbox is open", () => {
+  it("queues a throttled read when the inbox is displayed and flags stale connections", async () => {
+    h = await createHarness();
+    const s = await seedWorkspace(h);
+    const other = await seedWorkspace(h, "Fremdhändler");
+    const fake = await startFakeMirakl({ apiKey: "mirakl-key" });
+    closers.push(() => fake.close());
+    const id = await createMiraklConnection(h.ctx, s.owner, { displayName: "Shop Apotheke", baseUrl: fake.baseUrl, apiKey: "mirakl-key" });
+    const queued = async () => (await many(h!.ctx.db, "SELECT 1 FROM jobs WHERE type = 'mail.sync' AND payload->>'connectionId' = $1 AND status IN ('queued','running')", [id])).length;
+
+    // Another workspace's inbox does not read this connection.
+    const foreign = await inboxDisplayed(h.ctx, other.viewer);
+    assert.equal(foreign.connections.some((c) => c.id === id), false);
+    assert.equal(await queued(), 0);
+
+    // Never read: stale, read is queued by a viewer just looking at the inbox.
+    const first = await inboxDisplayed(h.ctx, s.viewer);
+    const state = first.connections.find((c) => c.id === id)!;
+    assert.equal(state.stale, true);
+    assert.equal(state.background, false);
+    assert.equal(state.fetching, true);
+    assert.equal(await queued(), 1);
+    await drainWithDrafts(h, 200);
+    assert.equal(await queued(), 0);
+
+    // Read a moment ago: no new read, not stale.
+    const second = await inboxDisplayed(h.ctx, s.agent);
+    assert.equal(second.connections.find((c) => c.id === id)!.stale, false);
+    assert.equal(await queued(), 0, "throttled to one read per 10 minutes");
+
+    // 11 minutes later the inbox reads again.
+    await h.ctx.db.query("UPDATE channel_connections SET last_sync_at = now() - interval '11 minutes' WHERE id = $1", [id]);
+    await inboxDisplayed(h.ctx, s.agent);
+    assert.equal(await queued(), 1);
+    await drainWithDrafts(h, 200);
+
+    // Five hours without a read: flagged even without triggering.
+    await h.ctx.db.query("UPDATE channel_connections SET last_sync_at = now() - interval '5 hours' WHERE id = $1", [id]);
+    const stale = await inboxDisplayed(h.ctx, s.agent, { trigger: false });
+    assert.equal(stale.connections.find((c) => c.id === id)!.stale, true);
+    assert.equal(await queued(), 0);
+
+    // Paused: not read and not listed.
+    await h.ctx.db.query("UPDATE channel_connections SET paused = true WHERE id = $1", [id]);
+    const paused = await inboxDisplayed(h.ctx, s.agent);
+    assert.equal(paused.connections.some((c) => c.id === id), false);
+    assert.equal(await queued(), 0);
+
+    // With the operator's permission the worker polls; the inbox no longer triggers.
+    await h.ctx.db.query("UPDATE channel_connections SET paused = false WHERE id = $1", [id]);
+    await setMiraklBackgroundSync(h.ctx, s.owner, id, { allowed: true, evidenceNote: "Freigabe per Mail vom Partner-Management, 14.11." });
+    const allowed = await inboxDisplayed(h.ctx, s.agent);
+    assert.equal(allowed.connections.find((c) => c.id === id)!.background, true);
+    assert.equal(await queued(), 0);
+    await scheduleTick(h.ctx);
+    assert.equal(await queued(), 1);
   });
 });
 
