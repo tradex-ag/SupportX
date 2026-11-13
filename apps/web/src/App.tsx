@@ -4,6 +4,7 @@ import { Inbox } from "./Inbox.tsx";
 import { Refunds } from "./Refunds.tsx";
 import { Report } from "./Report.tsx";
 import { Settings } from "./Settings.tsx";
+import { parseSettingsTab, settingsHash } from "./settings-tabs.ts";
 
 interface Me {
   user: { id: string; email: string; display_name: string };
@@ -59,7 +60,13 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [view, setView] = useState<"inbox" | "refunds" | "report" | "settings">("inbox");
+  // A settings tab in the URL hash (e.g. after a reload) opens the settings on that tab.
+  const [view, setViewState] = useState<"inbox" | "refunds" | "report" | "settings">(() => (parseSettingsTab(window.location.hash) ? "settings" : "inbox"));
+  const setView = useCallback((next: "inbox" | "refunds" | "report" | "settings") => {
+    setViewState(next);
+    // The hash only names a settings tab; drop it on other pages so a reload lands there.
+    if (next !== "settings" && window.location.hash) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  }, []);
   // A case opened from another page (e.g. the refund list) shows in the inbox.
   const [openCase, setOpenCase] = useState<{ id: string; n: number } | null>(null);
   const [refundsOpen, setRefundsOpen] = useState<number | null>(null);
@@ -101,7 +108,7 @@ export function App() {
     const state = params.get("ebay_state");
     const failed = params.get("ebay_error");
     if (!code && !failed) return;
-    window.history.replaceState(null, "", window.location.pathname);
+    window.history.replaceState(null, "", `${window.location.pathname}${settingsHash("marktplaetze")}`);
     setView("settings");
     if (failed || !code || !state) {
       setOauthNotice(`eBay-Anmeldung nicht abgeschlossen (${failed ?? "unvollständig"}).`);

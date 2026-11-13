@@ -189,6 +189,9 @@ ol.steps li > button.link { flex: none; font-size: 12px; }
    About 560px per card: 3 columns on a large screen, 2 on a laptop, 1 on a phone. */
 .settings-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; }
 .settings { overflow: visible; max-width: none; margin: 0; grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); align-items: start; padding: 16px 20px 40px; }
+/* Tabs at the top of the settings: same look as the main menu (active = black underline, red only as error count). */
+.settings-tabs { grid-column: 1 / -1; display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 4px; flex-wrap: wrap; }
+.settings-tabs .tab { padding-left: 14px; padding-right: 14px; background: transparent; }
 .credit { grid-column: 1 / -1; margin: 8px 0 0; }
 .credit a { color: inherit; }
 .order-links { margin-bottom: 8px; }
