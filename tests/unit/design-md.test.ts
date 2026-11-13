@@ -43,8 +43,8 @@ describe("readDesignMd", () => {
   });
 
   it("prefers a JSON block in theme.json form", () => {
-    const r = readDesignMd('Text\n```json\n{"productName":"Auwald Support","colors":{"primary":"#1e5a2b"},"radius":6}\n```\nHintergrund: #ffffff');
-    assert.equal(r.theme.productName, "Auwald Support");
+    const r = readDesignMd('Text\n```json\n{"productName":"Muster Support","colors":{"primary":"#1e5a2b"},"radius":6}\n```\nHintergrund: #ffffff');
+    assert.equal(r.theme.productName, "Muster Support");
     assert.equal(r.theme.colors.primary, "#1e5a2b");
     assert.equal(r.theme.colors.primaryText, "#ffffff", "a readable text colour for the button is picked");
     assert.equal(r.theme.radius, 6);

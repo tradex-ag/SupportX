@@ -12,13 +12,13 @@ afterEach(async () => {
 });
 after(closeDb);
 
-const COPY = "[Amazon.com] Sehr geehrte(r) Auwald Bio,\n\nHier ist eine Kopie der E-Mail, die du an Sevinc gesendet hast.\n\nBestellnummer 303-7978499-5468368:\n\nAnbei das Retourenlabel.";
+const COPY = "[Amazon.com] Sehr geehrte(r) Demo-Händler,\n\nHier ist eine Kopie der E-Mail, die du an Erika gesendet hast.\n\nBestellnummer 302-1234567-7654321:\n\nAnbei das Retourenlabel.";
 
 describe("Amazon copies of our own messages", () => {
   it("are sorted out on arrival, without a draft", async () => {
     h = await createHarness();
     const s = await seedWorkspace(h);
-    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Sevinc", body: COPY, conversationId: "copy-1" });
+    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Erika", body: COPY, conversationId: "copy-1" });
     await syncAndDrain(h, s);
     const conv = await caseByThread(h, s, "copy-1");
     const row = (await one<{ category: string; category_reason: string }>(h.ctx.db, "SELECT category, category_reason FROM conversations WHERE id = $1", [conv.id]))!;
@@ -29,8 +29,8 @@ describe("Amazon copies of our own messages", () => {
   it("existing ones are moved by the migration, a person's choice stays", async () => {
     h = await createHarness();
     const s = await seedWorkspace(h);
-    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Sevinc", body: COPY, conversationId: "copy-2" });
-    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Ingrid", body: COPY.replace("Sevinc", "Ingrid"), conversationId: "copy-3" });
+    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Erika", body: COPY, conversationId: "copy-2" });
+    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Ingrid", body: COPY.replace("Erika", "Ingrid"), conversationId: "copy-3" });
     await syncAndDrain(h, s);
     const auto = await caseByThread(h, s, "copy-2");
     const person = await caseByThread(h, s, "copy-3");
@@ -47,8 +47,8 @@ describe("our answers in the history", () => {
   it("shows Amazon's copy of our reply in the case of the same order, with only our text", async () => {
     h = await createHarness();
     const s = await seedWorkspace(h);
-    h.graph.addInbound({ from: "kunde-x@marketplace.amazon.de", subject: "Falscher Artikel (Bestellung: 303-7978499-5468368)", body: "Ich habe die falsche Dose bekommen.", conversationId: "req-1" });
-    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Sevinc", body: COPY.replace("Anbei das Retourenlabel.", "------------- Beginnmeldung -------------\n\nAnbei das Retourenlabel, wir senden Ersatz.\n\n------------- Endmeldung -------------"), conversationId: "copy-9" });
+    h.graph.addInbound({ from: "kunde-x@marketplace.amazon.de", subject: "Falscher Artikel (Bestellung: 302-1234567-7654321)", body: "Ich habe die falsche Dose bekommen.", conversationId: "req-1" });
+    h.graph.addInbound({ from: "donotreply@amazon.com", subject: "Deine E-Mail an Erika", body: COPY.replace("Anbei das Retourenlabel.", "------------- Beginnmeldung -------------\n\nAnbei das Retourenlabel, wir senden Ersatz.\n\n------------- Endmeldung -------------"), conversationId: "copy-9" });
     await syncAndDrain(h, s);
     const req = await caseByThread(h, s, "req-1");
     const view = await getCase(h.ctx, s.agent, req.id);

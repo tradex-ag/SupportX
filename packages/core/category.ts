@@ -52,7 +52,7 @@ function ruleHit(rule: CategoryRule, from: string, subject: string): boolean {
   return domain === pattern || domain.endsWith(`.${pattern}`);
 }
 
-/** "Hier ist eine Kopie der E-Mail, die du an Sevinc gesendet hast." (and the English form). */
+/** "Hier ist eine Kopie der E-Mail, die du an Erika gesendet hast." (and the English form). */
 export const OWN_COPY = /hier ist eine kopie (der|deiner|ihrer) (e-?mail|nachricht),? die (du|sie) an .{1,80}? gesendet ha(st|ben)|here is a copy of the (e-?mail|message) you sent to/i;
 export const OWN_COPY_REASON = "Kopie einer eigenen Nachricht an den Käufer";
 

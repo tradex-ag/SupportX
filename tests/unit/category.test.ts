@@ -43,7 +43,7 @@ describe("request or advertising", () => {
 describe("own copies from Amazon", () => {
   const amazon = { address: "donotreply@amazon.com", name: "Amazon.de" };
   it("sorts out the copy of a message we sent, even with an order number in it", () => {
-    const d = categorizeMail({ from: amazon, subject: "Deine E-Mail an Sevinc", bodyText: "[Amazon.com] Sehr geehrte(r) Auwald Bio,\nHier ist eine Kopie der E-Mail, die du an Sevinc gesendet hast.\nBestellnummer 303-7978499-5468368", headers: {}, hasOrderReference: true });
+    const d = categorizeMail({ from: amazon, subject: "Deine E-Mail an Erika", bodyText: "[Amazon.com] Sehr geehrte(r) Demo-Händler,\nHier ist eine Kopie der E-Mail, die du an Erika gesendet hast.\nBestellnummer 302-1234567-7654321", headers: {}, hasOrderReference: true });
     assert.equal(d.category, "info");
     assert.equal(d.reason, OWN_COPY_REASON);
     assert.equal(categorizeMail({ from: amazon, subject: "Your e-mail to Max", bodyText: "Here is a copy of the e-mail you sent to Max.", headers: {}, hasOrderReference: true }).category, "info");
