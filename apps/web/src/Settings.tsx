@@ -3,6 +3,7 @@ import { AmazonListingsCard } from "./AmazonListingsSettings.tsx";
 import { api, fmtDate, PLATFORM_LABEL } from "./api.ts";
 import { DEADLINE_PLATFORMS, DEFAULT_REPLY_DEADLINES, MAX_DEADLINE_HOURS } from "../../../packages/core/deadline.ts";
 import { SNIPPET_PLACEHOLDERS } from "../../../packages/core/snippet-placeholders.ts";
+import { DEFAULT_SETTINGS_TAB, parseSettingsTab, SETTINGS_TABS, settingsHash, tabAlerts, type SettingsTab } from "./settings-tabs.ts";
 import { API_MARKETS, MAIL_MARKETS, MARKET_KIND, marketSetup, microsoftSetup, weclappSetup, type ChannelSetup, type StepAction } from "./setup-steps.ts";
 
 type Role = "owner" | "agent" | "viewer";
@@ -39,8 +40,21 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [panel, setPanel] = useState<{ card: string; action: StepAction; id?: string } | null>(null);
+  const [tab, setTab] = useState<SettingsTab>(() => parseSettingsTab(window.location.hash) ?? DEFAULT_SETTINGS_TAB);
   const base = `/api/w/${workspaceId}`;
   const owner = role === "owner";
+
+  // Keep the tab in the URL hash (reload stays on it) and follow back/forward or a pasted link.
+  useEffect(() => {
+    const onHash = () => { const t = parseSettingsTab(window.location.hash); if (t) setTab(t); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const chooseTab = (t: SettingsTab) => {
+    setTab(t);
+    setPanel(null);
+    if (window.location.hash !== settingsHash(t)) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${settingsHash(t)}`);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +83,11 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
     return `${res.ok ? "Verbindung in Ordnung" : "Prüfung fehlgeschlagen"}: ${res.detail}`;
   };
 
+  const setupInput = { ...data, confirmations: data.workspace.setup_confirmations };
+  const alerts = tabAlerts({
+    anbindungen: [microsoftSetup(data), weclappSetup(data)],
+    marktplaetze: [...API_MARKETS, ...MAIL_MARKETS].map((m) => marketSetup(m, setupInput)),
+  });
   const mailboxCount = (c: Connection) => (c.kind === "microsoft_graph" ? data.connections.filter((x) => x.kind === "microsoft_graph" && x.config.mailbox === c.config.mailbox).length : 1);
   const closePanel = () => setPanel(null);
   const checkFirst = (kind: string) => {
@@ -95,7 +114,16 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
       {notice && <p className="notice ok">{notice}</p>}
       {!owner && <p className="notice muted">Nur Inhaber können Einstellungen ändern.</p>}
 
-      <h2 className="settings-title">Anbindungen</h2>
+      <nav className="settings-tabs" role="tablist" aria-label="Bereiche der Einstellungen">
+        {SETTINGS_TABS.map((t) => (
+          <button key={t.id} type="button" role="tab" id={`settings-tab-${t.id}`} aria-selected={tab === t.id} className={tab === t.id ? "tab active" : "tab"} onClick={() => chooseTab(t.id)}>
+            {t.label}
+            {alerts[t.id] > 0 && <span className="count" title={`${alerts[t.id]} mit Fehler`}>{alerts[t.id]}</span>}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "anbindungen" && <>
       <p className="muted settings-sub">Jede Karte zeigt, was erledigt ist und was als Nächstes zu tun ist. Ein grüner Innenrand heißt: Nachrichten kommen an. Antworten bleiben Entwürfe, bis ein Antwortweg geprüft und der Versand freigeschaltet ist.</p>
 
       <SetupCard setup={microsoftSetup(data)} owner={owner} onAction={(a) => a === "check" ? checkFirst("microsoft_graph") : setPanel({ card: "microsoft", action: a })}>
@@ -114,8 +142,9 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
         {owner && (panel?.card === "weclapp" || !data.erp) && <ErpForm current={data.erp?.base_url ?? ""} onSubmit={(body) => { closePanel(); void act(() => api("PUT", `${base}/erp`, body), () => "weclapp gespeichert. Bitte einmal „Verbindung testen“."); }} />}
         {owner && data.erp && panel?.card !== "weclapp" && <div className="row"><button onClick={() => setPanel({ card: "weclapp", action: "erp" })}>Adresse oder Token ändern</button></div>}
       </SetupCard>
+      </>}
 
-      <h2 className="settings-title">Marktplätze</h2>
+      {tab === "marktplaetze" && <>
       {[...API_MARKETS, ...MAIL_MARKETS].map((m) => {
         const kind = (API_MARKETS as readonly string[]).includes(m) ? MARKET_KIND[m as (typeof API_MARKETS)[number]] : null;
         const own = kind ? data.connections.filter((c) => c.kind === kind) : [];
@@ -146,8 +175,9 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
       })}
 
       <AmazonListingsCard base={base} owner={owner} />
+      </>}
 
-      <h2 className="settings-title">Weitere Einstellungen</h2>
+      {tab === "weitere" && <>
       {owner && (
         <section className="card">
           <h3>Auswertung</h3>
@@ -220,6 +250,7 @@ export function Settings({ workspaceId, role }: { workspaceId: string; role: Rol
           </tbody>
         </table>
       </details>
+      </>}
       <p className="small muted credit">SupportX ist Open Source (<a href="https://github.com/tradex-ag/SupportX" target="_blank" rel="noopener">AGPL-3.0, Quellcode</a>), ein Produkt von <a href="https://aseio.app" target="_blank" rel="noopener">ASEIO</a> · TradeX International AG, Lars Orlamünde</p>
     </div></div>
   );
